@@ -286,6 +286,21 @@ class App(tk.Tk):
                                  font=('Courier', 10), width=4, anchor='w')
         self.dur_lbl.pack(side='right', padx=(6, 0))
 
+        # Volume
+        self.vol_var = tk.DoubleVar(value=0.8)
+        tk.Label(bar, text="🔊", bg=BG2, fg=FG2,
+                 font=('Helvetica', 10)).pack(side='right', padx=(8, 0))
+        vol_slider = tk.Scale(
+            bar, from_=0, to=100, orient='horizontal',
+            variable=self.vol_var, showvalue=False, length=80,
+            bg=BG2, fg=FG, troughcolor=BG3, activebackground=ACCENT,
+            highlightthickness=0, bd=0, sliderlength=12,
+            command=self._set_volume,
+        )
+        vol_slider.set(80)
+        vol_slider.pack(side='right')
+        pygame.mixer.music.set_volume(0.8)
+
         # Scrubber
         self.prog_canvas = tk.Canvas(bar, bg=BG2, height=20,
                                       highlightthickness=0, cursor='hand2')
@@ -497,6 +512,9 @@ class App(tk.Tk):
             return
         secs = max(0.0, min(1.0, event.x / w)) * self.p_duration
         self._play_from(secs)
+
+    def _set_volume(self, val):
+        pygame.mixer.music.set_volume(float(val) / 100.0)
 
     def _schedule_progress(self):
         self._cancel_progress()
