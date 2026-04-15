@@ -12,6 +12,7 @@ from tkinter import filedialog
 from pathlib import Path
 import time
 import struct
+import threading
 import pygame
 from mutagen.mp3 import MP3
 from mutagen.wave import WAVE
@@ -31,7 +32,8 @@ RATING_LABELS = {1: "1★  Situational", 3: "3★  Reliable", 5: "5★  Essentia
 COMMENT_TAGS = {
     "Style":       ["House", "Disco", "Funk", "Pop", "Hip-Hop", "R&B",
                     "Latin", "Afro", "Electronic", "Soul",
-                    "Arabic", "Desi", "East-Asian"],
+                    "Arabic", "Desi", "East-Asian",
+                    "Hardstyle", "Techno", "DnB"],
     "Mood":        ["Happy", "Chill", "Sexy", "Dark", "Fun",
                     "Uplifting", "Nostalgic", "Emotional"],
     "Vibe":        ["Groovy", "Bouncy", "Driving", "Anthemic", "Melodic", "Classic",
@@ -471,11 +473,25 @@ class App(tk.Tk):
         px = max(1, min(w - 1, filled_px))
         c.create_line(px, 0, px, h, fill=FG, width=1)
 
+    def _load_waveform_async(self, path):
+        """Compute waveform in a background thread to avoid blocking the UI."""
+        def _worker(p=path):
+            data = compute_waveform(p)
+            self.after(0, lambda: self._on_waveform_ready(p, data))
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_waveform_ready(self, path, data):
+        if self.files and self.files[self.idx] == path:
+            self.waveform = data
+            self._draw_progress(self._pos_fraction())
+
     def _play_track(self, path):
         """Load and start playing a track from the beginning."""
         self._cancel_progress()
         pygame.mixer.music.stop()
-        self.waveform = compute_waveform(path)
+        self.waveform = []
+        self._draw_progress(0)
+        self._load_waveform_async(path)
         try:
             pygame.mixer.music.load(str(path))
             pygame.mixer.music.play()
