@@ -11,11 +11,13 @@ import tkinter as tk
 from tkinter import filedialog
 from pathlib import Path
 import time
+import struct
 import pygame
 from mutagen.mp3 import MP3
 from mutagen.wave import WAVE
 from mutagen.aiff import AIFF
 from mutagen.id3 import TCON, COMM, POPM
+from pydub import AudioSegment
 
 # ─── Config ────────────────────────────────────────────────────────────────────
 
@@ -140,6 +142,29 @@ def write_tags(path, energy, rating, comments):
     except Exception as e:
         return str(e)
 
+def compute_waveform(path, num_bars=200):
+    """Return a list of normalised peak amplitudes (0.0–1.0) for drawing."""
+    try:
+        seg = AudioSegment.from_file(str(path))
+        seg = seg.set_channels(1)
+        samples = struct.unpack(f"<{len(seg.raw_data)//2}h", seg.raw_data)
+        n = len(samples)
+        if n == 0:
+            return [0.0] * num_bars
+        chunk = max(1, n // num_bars)
+        peaks = []
+        for i in range(num_bars):
+            start = i * chunk
+            end = min(start + chunk, n)
+            if start >= n:
+                peaks.append(0.0)
+            else:
+                peaks.append(max(abs(s) for s in samples[start:end]))
+        mx = max(peaks) or 1
+        return [p / mx for p in peaks]
+    except Exception:
+        return [0.0] * num_bars
+
 # ─── App ───────────────────────────────────────────────────────────────────────
 
 class App(tk.Tk):
@@ -165,6 +190,7 @@ class App(tk.Tk):
         self.p_seek_off = 0.0         # position (secs) at last play/seek
         self.p_t0       = 0.0         # time.time() when current segment started
         self._prog_job  = None
+        self.waveform   = []
 
         pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
 
@@ -301,8 +327,8 @@ class App(tk.Tk):
         vol_slider.pack(side='right')
         pygame.mixer.music.set_volume(0.8)
 
-        # Scrubber
-        self.prog_canvas = tk.Canvas(bar, bg=BG2, height=20,
+        # Waveform / Scrubber
+        self.prog_canvas = tk.Canvas(bar, bg=BG2, height=60,
                                       highlightthickness=0, cursor='hand2')
         self.prog_canvas.pack(side='left', fill='x', expand=True)
         self.prog_canvas.bind('<Button-1>', self._seek_click)
@@ -422,22 +448,33 @@ class App(tk.Tk):
         if w < 4 or h < 4:
             return
         mid = h // 2
-        # Track line
-        c.create_line(0, mid, w, mid, fill=BG3, width=4)
-        # Filled portion
-        filled = int(w * max(0.0, min(1.0, frac)))
-        if filled > 0:
-            c.create_line(0, mid, filled, mid, fill=ACCENT, width=4)
-        # Playhead dot
-        r = 6
-        cx = max(r, min(w - r, filled))
-        c.create_oval(cx - r, mid - r, cx + r, mid + r,
-                      fill=ACCENT, outline=BG2, width=2)
+        frac = max(0.0, min(1.0, frac))
+        filled_px = int(w * frac)
+
+        if self.waveform:
+            num_bars = len(self.waveform)
+            bar_w = w / num_bars
+            for i, peak in enumerate(self.waveform):
+                x0 = int(i * bar_w)
+                x1 = max(x0 + 1, int((i + 1) * bar_w) - 1)
+                bar_h = max(1, int(peak * (mid - 2)))
+                color = ACCENT if x0 < filled_px else BG3
+                c.create_rectangle(x0, mid - bar_h, x1, mid + bar_h,
+                                   fill=color, outline='')
+        else:
+            c.create_line(0, mid, w, mid, fill=BG3, width=4)
+            if filled_px > 0:
+                c.create_line(0, mid, filled_px, mid, fill=ACCENT, width=4)
+
+        # Playhead line
+        px = max(1, min(w - 1, filled_px))
+        c.create_line(px, 0, px, h, fill=FG, width=1)
 
     def _play_track(self, path):
         """Load and start playing a track from the beginning."""
         self._cancel_progress()
         pygame.mixer.music.stop()
+        self.waveform = compute_waveform(path)
         try:
             pygame.mixer.music.load(str(path))
             pygame.mixer.music.play()
@@ -495,6 +532,9 @@ class App(tk.Tk):
             if self.files:
                 self._play_track(self.files[self.idx])
 
+    def _set_volume(self, val):
+        pygame.mixer.music.set_volume(float(val) / 100.0)
+
     def _stop_player(self):
         self._cancel_progress()
         pygame.mixer.music.stop()
@@ -512,9 +552,6 @@ class App(tk.Tk):
             return
         secs = max(0.0, min(1.0, event.x / w)) * self.p_duration
         self._play_from(secs)
-
-    def _set_volume(self, val):
-        pygame.mixer.music.set_volume(float(val) / 100.0)
 
     def _schedule_progress(self):
         self._cancel_progress()
