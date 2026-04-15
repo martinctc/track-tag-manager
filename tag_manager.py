@@ -11,7 +11,7 @@ import tkinter as tk
 from tkinter import filedialog
 from pathlib import Path
 import time
-import struct
+import audioop
 import threading
 import pygame
 from mutagen.mp3 import MP3
@@ -148,21 +148,21 @@ def compute_waveform(path, num_bars=200):
     """Return a list of normalised RMS amplitudes (0.0–1.0) for drawing."""
     try:
         seg = AudioSegment.from_file(str(path))
-        seg = seg.set_channels(1)
-        samples = struct.unpack(f"<{len(seg.raw_data)//2}h", seg.raw_data)
-        n = len(samples)
-        if n == 0:
+        seg = seg.set_channels(1).set_sample_width(2)
+        raw = seg.raw_data
+        n_samples = len(raw) // 2
+        if n_samples == 0:
             return [0.0] * num_bars
-        chunk = max(1, n // num_bars)
+        chunk_samples = max(1, n_samples // num_bars)
+        chunk_bytes = chunk_samples * 2
         rms_vals = []
         for i in range(num_bars):
-            start = i * chunk
-            end = min(start + chunk, n)
-            if start >= n:
+            start = i * chunk_bytes
+            end = min(start + chunk_bytes, len(raw))
+            if start >= len(raw):
                 rms_vals.append(0.0)
             else:
-                block = samples[start:end]
-                rms_vals.append((sum(s * s for s in block) / len(block)) ** 0.5)
+                rms_vals.append(audioop.rms(raw[start:end], 2))
         mx = max(rms_vals) or 1
         return [v / mx for v in rms_vals]
     except Exception:
@@ -194,6 +194,9 @@ class App(tk.Tk):
         self.p_t0       = 0.0         # time.time() when current segment started
         self._prog_job  = None
         self.waveform   = []
+        self._wave_ids  = []          # canvas item IDs for waveform bars
+        self._head_id   = None        # canvas item ID for playhead line
+        self._last_fill = -1          # last filled bar index for incremental updates
 
         pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
 
@@ -336,7 +339,7 @@ class App(tk.Tk):
         self.prog_canvas.pack(side='left', fill='x', expand=True)
         self.prog_canvas.bind('<Button-1>', self._seek_click)
         self.prog_canvas.bind('<B1-Motion>', self._seek_click)
-        self.prog_canvas.bind('<Configure>', lambda e: self._draw_progress(self._pos_fraction()))
+        self.prog_canvas.bind('<Configure>', lambda e: self._on_canvas_resize())
 
     def _sec(self, parent, label):
         tk.Label(parent, text=label, bg=BG, fg=FG2,
@@ -443,17 +446,18 @@ class App(tk.Tk):
             return self.p_seek_off + (time.time() - self.p_t0)
         return self.p_seek_off
 
-    def _draw_progress(self, frac):
+    def _build_waveform(self):
+        """Create canvas items for waveform bars and playhead (called once per track)."""
         c = self.prog_canvas
         c.delete('all')
+        self._wave_ids = []
+        self._head_id = None
+        self._last_fill = -1
         w = c.winfo_width()
         h = c.winfo_height()
         if w < 4 or h < 4:
             return
         mid = h // 2
-        frac = max(0.0, min(1.0, frac))
-        filled_px = int(w * frac)
-
         if self.waveform:
             num_bars = len(self.waveform)
             bar_w = w / num_bars
@@ -461,17 +465,38 @@ class App(tk.Tk):
                 x0 = int(i * bar_w)
                 x1 = max(x0 + 1, int((i + 1) * bar_w) - 1)
                 bar_h = max(1, int(peak * (mid - 2)))
-                color = ACCENT if x0 < filled_px else BG3
-                c.create_rectangle(x0, mid - bar_h, x1, mid + bar_h,
-                                   fill=color, outline='')
+                rid = c.create_rectangle(x0, mid - bar_h, x1, mid + bar_h,
+                                         fill=BG3, outline='')
+                self._wave_ids.append(rid)
         else:
-            c.create_line(0, mid, w, mid, fill=BG3, width=4)
-            if filled_px > 0:
-                c.create_line(0, mid, filled_px, mid, fill=ACCENT, width=4)
+            self._wave_ids.append(c.create_line(0, mid, w, mid, fill=BG3, width=4))
+        self._head_id = c.create_line(1, 0, 1, h, fill=FG, width=1)
 
-        # Playhead line
-        px = max(1, min(w - 1, filled_px))
-        c.create_line(px, 0, px, h, fill=FG, width=1)
+    def _draw_progress(self, frac):
+        c = self.prog_canvas
+        w = c.winfo_width()
+        h = c.winfo_height()
+        if w < 4 or h < 4:
+            return
+        frac = max(0.0, min(1.0, frac))
+
+        if self._wave_ids and self.waveform:
+            num_bars = len(self.waveform)
+            bar_w = w / num_bars
+            filled_bar = int(frac * num_bars)
+            filled_bar = min(filled_bar, num_bars - 1)
+            if filled_bar != self._last_fill:
+                lo = min(filled_bar, self._last_fill if self._last_fill >= 0 else 0)
+                hi = max(filled_bar, self._last_fill if self._last_fill >= 0 else 0)
+                for i in range(lo, hi + 1):
+                    color = ACCENT if i <= filled_bar else BG3
+                    c.itemconfig(self._wave_ids[i], fill=color)
+                self._last_fill = filled_bar
+
+        if self._head_id:
+            filled_px = int(w * frac)
+            px = max(1, min(w - 1, filled_px))
+            c.coords(self._head_id, px, 0, px, h)
 
     def _load_waveform_async(self, path):
         """Compute waveform in a background thread to avoid blocking the UI."""
@@ -480,9 +505,14 @@ class App(tk.Tk):
             self.after(0, lambda: self._on_waveform_ready(p, data))
         threading.Thread(target=_worker, daemon=True).start()
 
+    def _on_canvas_resize(self):
+        self._build_waveform()
+        self._draw_progress(self._pos_fraction())
+
     def _on_waveform_ready(self, path, data):
         if self.files and self.files[self.idx] == path:
             self.waveform = data
+            self._build_waveform()
             self._draw_progress(self._pos_fraction())
 
     def _play_track(self, path):
@@ -490,7 +520,7 @@ class App(tk.Tk):
         self._cancel_progress()
         pygame.mixer.music.stop()
         self.waveform = []
-        self._draw_progress(0)
+        self._build_waveform()
         self._load_waveform_async(path)
         try:
             pygame.mixer.music.load(str(path))
