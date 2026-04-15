@@ -143,7 +143,7 @@ def write_tags(path, energy, rating, comments):
         return str(e)
 
 def compute_waveform(path, num_bars=200):
-    """Return a list of normalised peak amplitudes (0.0–1.0) for drawing."""
+    """Return a list of normalised RMS amplitudes (0.0–1.0) for drawing."""
     try:
         seg = AudioSegment.from_file(str(path))
         seg = seg.set_channels(1)
@@ -152,16 +152,17 @@ def compute_waveform(path, num_bars=200):
         if n == 0:
             return [0.0] * num_bars
         chunk = max(1, n // num_bars)
-        peaks = []
+        rms_vals = []
         for i in range(num_bars):
             start = i * chunk
             end = min(start + chunk, n)
             if start >= n:
-                peaks.append(0.0)
+                rms_vals.append(0.0)
             else:
-                peaks.append(max(abs(s) for s in samples[start:end]))
-        mx = max(peaks) or 1
-        return [p / mx for p in peaks]
+                block = samples[start:end]
+                rms_vals.append((sum(s * s for s in block) / len(block)) ** 0.5)
+        mx = max(rms_vals) or 1
+        return [v / mx for v in rms_vals]
     except Exception:
         return [0.0] * num_bars
 
