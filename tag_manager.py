@@ -39,7 +39,7 @@ COMMENT_TAGS = {
     "Vibe":        ["Groovy", "Bouncy", "Driving", "Anthemic", "Melodic", "Classic",
                     "Punchy", "Deep", "Smooth", "Soulful", "Tropical", "Late-Night",
                     "Banging"],
-    "Crowd":       ["Singalong", "Dancefloor", "Crowd-Pleaser", "Beach-Vibes"],
+    "Crowd":       ["Singalong", "Dancefloor", "Crowd-Pleaser", "Beach-Vibes", "Cafe-Set"],
     "Vocals":      ["Vocals", "No-Vocals", "Rap"],
     "Instruments": ["Piano", "Guitar", "Horns", "Bass-Heavy", "Strings",
                     "Synth", "Percussion", "Organ"],

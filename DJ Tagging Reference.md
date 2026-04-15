@@ -56,7 +56,7 @@ Deep  Smooth  Soulful  Tropical  Late-Night  Banging
 
 ### Crowd — how the track lands
 ```
-Singalong  Dancefloor  Crowd-Pleaser  Beach-Vibes
+Singalong  Dancefloor  Crowd-Pleaser  Beach-Vibes  Cafe-Set
 ```
 
 ### Vocals
