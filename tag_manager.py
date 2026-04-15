@@ -555,6 +555,8 @@ class App(tk.Tk):
     def _select(self, idx):
         if not self.files or not (0 <= idx < len(self.files)):
             return
+        if self.unsaved:
+            self._save()
         self.idx = idx
         self.listbox.selection_clear(0, 'end')
         self.listbox.selection_set(idx)
@@ -626,8 +628,17 @@ class App(tk.Tk):
     def _save(self):
         if not self.files:
             return
+        path = self.files[self.idx]
+        # Remember playback state so we can resume after saving
+        was_playing = self.p_state == 'playing'
+        was_paused  = self.p_state == 'paused'
+        resume_pos  = self._current_pos() if was_playing else self.p_seek_off
+        # Unload the file so pygame releases the file handle
+        self._cancel_progress()
+        pygame.mixer.music.stop()
+        pygame.mixer.music.unload()
         err = write_tags(
-            self.files[self.idx],
+            path,
             self.tags.get('energy'),
             self.tags.get('rating'),
             self.tags.get('comments', set()),
@@ -638,6 +649,19 @@ class App(tk.Tk):
             self.unsaved = False
             self._msg("✓ saved", ACCENT)
             self.after(2500, lambda: self._msg("") if not self.unsaved else None)
+        # Resume playback from where we left off
+        if was_playing:
+            self._play_from(resume_pos)
+        elif was_paused:
+            try:
+                pygame.mixer.music.load(str(path))
+                pygame.mixer.music.play(start=float(resume_pos))
+                pygame.mixer.music.pause()
+            except Exception:
+                pygame.mixer.music.load(str(path))
+            self.p_state    = 'paused'
+            self.p_seek_off = resume_pos
+            self.play_btn.config(text="▶")
 
     def _prev(self):
         if self.idx > 0:
