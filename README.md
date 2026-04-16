@@ -28,10 +28,13 @@ After tagging, right-click any track in Rekordbox → **Reload Tags** and everyt
 
 - Folder picker on launch — point it at any music folder
 - Auto-plays each track as you select it
-- Click-to-seek scrubber with time display
+- Waveform scrubber with click-to-seek and time display
+- Volume control
 - Toggle buttons for energy, rating, and all comment tags
 - Keyboard-first workflow: `Space` play/pause · `S` save · `Enter` save + next · `↑↓` navigate
 - Tags written to file instantly on save, no library lock-in
+- Untagged tracks marked with `●` in the file list for easy identification
+- **Stats dashboard** (`📊 Stats`) — see how many tracks are tagged, energy/rating distribution, and top tags by frequency
 
 ---
 
