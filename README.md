@@ -84,11 +84,32 @@ The included `DJ Tagging Reference.md` documents the default tag vocabulary — 
 
 For best Rekordbox compatibility, **FLAC is the recommended lossless format** — it supports full metadata including comments, and produces smaller files than both WAV and AIFF.
 
-### Recommended workflow
+---
 
-1. **Tag your tracks** in DJ Tag Manager (WAV playback works for previewing)
-2. **Convert WAVs** → click `🔄 Convert WAVs` and choose FLAC
-3. **Import/reload in Rekordbox** — all tags (Genre, Rating, Comments) will be visible
+## Recommended workflow
+
+A typical DJ prep workflow looks like this:
+
+```
+Download / buy tracks  →  Tag & convert  →  Import into Rekordbox
+       (mixed formats)       (in any order)       (all tags visible)
+```
+
+**Step 1 — Collect tracks.** Download or purchase tracks into a prep folder (e.g. `To Prep`). These will be a mix of WAV, MP3, AIFF, and FLAC files — that's fine.
+
+**Step 2 — Tag and convert (in either order).**
+
+- **Option A: Tag first, convert after.** Open the folder in DJ Tag Manager, tag every track with energy, rating, style, mood, etc. Then click `🔄 Convert WAVs` to convert any WAV files to FLAC (recommended), AIFF, or MP3. Tags are preserved during conversion.
+
+- **Option B: Convert first, tag after.** Convert your WAVs up front so all files are in a Rekordbox-compatible format. Then tag them — the app reads and writes tags to all supported formats.
+
+Either order works. Tags are always preserved during conversion.
+
+**Step 3 — Import into Rekordbox.** Drag the folder into Rekordbox. All tags (Genre, Rating, Comments) will be visible. For tracks already in your library, select them → right-click → **Reload Tags**.
+
+**Step 4 — Archive or discard originals.** If you converted WAV files and kept the originals, you can safely archive or delete them — your tags live in the converted files.
+
+> 💡 **Tip:** Tag while previewing — WAV files play directly in the app, so tagging before converting lets you listen and tag in one pass.
 
 ---
 
