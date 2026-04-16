@@ -186,6 +186,7 @@ class App(tk.Tk):
         self.energy_btns = {}
         self.rating_btns = {}
         self.tag_btns    = {}
+        self.stats_win   = None
 
         # Player state
         self.p_state    = 'stopped'   # 'stopped' | 'playing' | 'paused'
@@ -219,6 +220,13 @@ class App(tk.Tk):
             relief='flat', padx=10, pady=4, bd=0, highlightthickness=0,
             font=('Helvetica', 9), cursor='hand2',
             command=self._pick_folder,
+        ).pack(side='right', padx=(8, 0))
+        tk.Button(
+            hdr, text="📊 Stats",
+            bg=BG3, fg=FG, activebackground=BG3, activeforeground=FG,
+            relief='flat', padx=10, pady=4, bd=0, highlightthickness=0,
+            font=('Helvetica', 9), cursor='hand2',
+            command=self._show_stats,
         ).pack(side='right', padx=(8, 0))
         self.status_lbl = tk.Label(hdr, text="", bg=BG, fg=FG2,
                                     font=('Helvetica', 10))
@@ -781,6 +789,167 @@ class App(tk.Tk):
         self._cancel_progress()
         pygame.mixer.quit()
         self.destroy()
+
+    # ── Stats dashboard ────────────────────────────────────────────────────────
+
+    def _show_stats(self):
+        """Open (or refresh) a stats dashboard window."""
+        if self.stats_win and self.stats_win.winfo_exists():
+            self.stats_win.lift()
+            self.stats_win.focus_force()
+            self._refresh_stats()
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Tag Stats")
+        win.configure(bg=BG)
+        win.geometry("520x620")
+        win.minsize(400, 400)
+        self.stats_win = win
+
+        self._stats_body = tk.Frame(win, bg=BG)
+        self._stats_body.pack(fill='both', expand=True, padx=16, pady=(10, 0))
+
+        btn_bar = tk.Frame(win, bg=BG)
+        btn_bar.pack(fill='x', padx=16, pady=10)
+        tk.Button(
+            btn_bar, text="🔄 Refresh", bg=BG3, fg=FG,
+            activebackground=BG3, activeforeground=FG,
+            relief='flat', padx=14, pady=6, bd=0, highlightthickness=0,
+            font=('Helvetica', 9), cursor='hand2',
+            command=self._refresh_stats,
+        ).pack(side='left')
+
+        # Show "Scanning…" then populate via after() to keep UI responsive
+        self._stats_loading = tk.Label(
+            self._stats_body, text="Scanning…", bg=BG, fg=FG2,
+            font=('Helvetica', 11))
+        self._stats_loading.pack(pady=30)
+        win.after(50, self._refresh_stats)
+
+    def _refresh_stats(self):
+        """Scan all tracks and redraw the stats dashboard content."""
+        if not self.stats_win or not self.stats_win.winfo_exists():
+            return
+
+        # Clear previous content
+        for w in self._stats_body.winfo_children():
+            w.destroy()
+
+        if not self.files:
+            tk.Label(self._stats_body, text="No tracks in folder.",
+                     bg=BG, fg=FG2, font=('Helvetica', 11)).pack(pady=30)
+            return
+
+        # ── Scan ──────────────────────────────────────────────────────────
+        total      = len(self.files)
+        tagged     = 0
+        errors     = 0
+        energy_cnt = {lv: 0 for lv in ENERGY_LEVELS}
+        rating_cnt = {r: 0 for r in RATINGS}
+        tag_cnt    = {}
+
+        for i, f in enumerate(self.files):
+            # Use in-memory state for the current track if unsaved
+            if i == self.idx and self.unsaved:
+                t = dict(self.tags)
+            else:
+                t = read_tags(f)
+
+            if '_err' in t:
+                errors += 1
+                continue
+
+            has_tag = False
+            if t.get('energy'):
+                energy_cnt[t['energy']] = energy_cnt.get(t['energy'], 0) + 1
+                has_tag = True
+            if t.get('rating'):
+                rating_cnt[t['rating']] = rating_cnt.get(t['rating'], 0) + 1
+                has_tag = True
+            for c in t.get('comments', set()):
+                tag_cnt[c] = tag_cnt.get(c, 0) + 1
+                has_tag = True
+            if has_tag:
+                tagged += 1
+
+        untagged = total - tagged - errors
+
+        # ── Render ────────────────────────────────────────────────────────
+        container = self._stats_body
+
+        # Scrollable canvas for the stats content
+        canvas = tk.Canvas(container, bg=BG, highlightthickness=0)
+        sb = tk.Scrollbar(container, orient='vertical', command=canvas.yview)
+        sf = tk.Frame(canvas, bg=BG)
+        sf.bind('<Configure>',
+                lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=sf, anchor='nw')
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+        canvas.bind('<MouseWheel>',
+                    lambda e: canvas.yview_scroll(-1 * (e.delta // 120), 'units'))
+
+        def section(text):
+            tk.Label(sf, text=text, bg=BG, fg=FG2,
+                     font=('Helvetica', 9, 'bold')).pack(anchor='w', pady=(14, 4))
+
+        def stat_row(parent, label, value, color=FG):
+            row = tk.Frame(parent, bg=BG)
+            row.pack(fill='x', pady=1)
+            tk.Label(row, text=label, bg=BG, fg=FG,
+                     font=('Helvetica', 10), anchor='w').pack(side='left')
+            tk.Label(row, text=str(value), bg=BG, fg=color,
+                     font=('Helvetica', 10, 'bold'), anchor='e').pack(side='right')
+
+        def bar_row(parent, label, count, max_count, color=ACCENT):
+            row = tk.Frame(parent, bg=BG)
+            row.pack(fill='x', pady=2)
+            tk.Label(row, text=label, bg=BG, fg=FG,
+                     font=('Helvetica', 10), width=14, anchor='w').pack(side='left')
+            tk.Label(row, text=str(count), bg=BG, fg=ACCENT,
+                     font=('Helvetica', 10, 'bold'), width=4, anchor='e').pack(side='right')
+            bar_frame = tk.Frame(row, bg=BG3, height=14)
+            bar_frame.pack(side='left', fill='x', expand=True, padx=(6, 6))
+            bar_frame.pack_propagate(False)
+            if max_count > 0 and count > 0:
+                frac = count / max_count
+                fill = tk.Frame(bar_frame, bg=color, width=1)
+                fill.place(relwidth=frac, relheight=1.0)
+
+        # Summary
+        section("SUMMARY")
+        pct = f"{tagged * 100 // total}%" if total > 0 else "0%"
+        stat_row(sf, "Total tracks", total)
+        stat_row(sf, "Tagged", f"{tagged}  ({pct})", ACCENT)
+        stat_row(sf, "Untagged", untagged)
+        if errors:
+            stat_row(sf, "Unreadable", errors, "#e74c3c")
+
+        # Energy distribution
+        section("ENERGY")
+        max_e = max(energy_cnt.values()) if energy_cnt else 0
+        for lv in ENERGY_LEVELS:
+            bar_row(sf, lv, energy_cnt[lv], max_e,
+                    ENERGY_COLORS.get(lv, ACCENT))
+
+        # Rating distribution
+        section("RATING")
+        max_r = max(rating_cnt.values()) if rating_cnt else 0
+        for r in RATINGS:
+            bar_row(sf, RATING_LABELS[r], rating_cnt[r], max_r)
+
+        # Comment tags — sorted by frequency
+        section("TOP TAGS")
+        sorted_tags = sorted(tag_cnt.items(), key=lambda x: x[1], reverse=True)
+        max_t = sorted_tags[0][1] if sorted_tags else 0
+        for tag, cnt in sorted_tags[:30]:
+            bar_row(sf, tag, cnt, max_t)
+
+        if not sorted_tags:
+            tk.Label(sf, text="No comment tags found.", bg=BG, fg=FG2,
+                     font=('Helvetica', 10, 'italic')).pack(anchor='w', pady=4)
 
 
 if __name__ == '__main__':
