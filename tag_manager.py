@@ -12,6 +12,7 @@ from tkinter import filedialog
 from pathlib import Path
 import time
 import audioop
+import shutil
 import threading
 import pygame
 from mutagen.mp3 import MP3
@@ -168,6 +169,27 @@ def compute_waveform(path, num_bars=200):
     except Exception:
         return [0.0] * num_bars
 
+
+def _has_ffmpeg():
+    """Check whether ffmpeg is available on PATH."""
+    return shutil.which('ffmpeg') is not None
+
+
+def _copy_id3_tags(src_path, dst_path):
+    """Copy all ID3 tags from one audio file to another."""
+    src = _open(src_path)
+    dst = _open(dst_path)
+    if src is None or dst is None:
+        return
+    src_tags = src.tags
+    if src_tags is None:
+        return
+    if dst.tags is None:
+        dst.add_tags()
+    for key in src_tags.keys():
+        dst.tags[key] = src_tags[key]
+    dst.save()
+
 # ─── App ───────────────────────────────────────────────────────────────────────
 
 class App(tk.Tk):
@@ -187,6 +209,7 @@ class App(tk.Tk):
         self.rating_btns = {}
         self.tag_btns    = {}
         self.stats_win   = None
+        self.convert_win = None
 
         # Render diff tracking — _SENTINEL forces full render on first call
         self._SENTINEL     = object()
@@ -236,6 +259,13 @@ class App(tk.Tk):
             relief='flat', padx=10, pady=4, bd=0, highlightthickness=0,
             font=('Helvetica', 9), cursor='hand2',
             command=self._show_stats,
+        ).pack(side='right', padx=(8, 0))
+        tk.Button(
+            hdr, text="🔄 Convert WAVs",
+            bg=BG3, fg=FG, activebackground=BG3, activeforeground=FG,
+            relief='flat', padx=10, pady=4, bd=0, highlightthickness=0,
+            font=('Helvetica', 9), cursor='hand2',
+            command=self._show_convert,
         ).pack(side='right', padx=(8, 0))
         self.status_lbl = tk.Label(hdr, text="", bg=BG, fg=FG2,
                                     font=('Helvetica', 10))
@@ -1000,6 +1030,174 @@ class App(tk.Tk):
         if not sorted_tags:
             tk.Label(sf, text="No comment tags found.", bg=BG, fg=FG2,
                      font=('Helvetica', 10, 'italic')).pack(anchor='w', pady=4)
+
+    # ── WAV converter ──────────────────────────────────────────────────────────
+
+    def _show_convert(self):
+        """Open the WAV conversion dialog."""
+        if self.convert_win and self.convert_win.winfo_exists():
+            self.convert_win.lift()
+            self.convert_win.focus_force()
+            return
+
+        wav_files = [f for f in self.files if f.suffix.lower() == '.wav']
+
+        if not wav_files:
+            self._msg("No WAV files to convert", FG2)
+            return
+
+        if not _has_ffmpeg():
+            self._msg("ffmpeg not found — required for conversion", "#e74c3c")
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Convert WAV Files")
+        win.configure(bg=BG)
+        win.geometry("480x340")
+        win.resizable(False, False)
+        self.convert_win = win
+
+        body = tk.Frame(win, bg=BG)
+        body.pack(fill='both', expand=True, padx=20, pady=16)
+
+        tk.Label(body, text="CONVERT WAV FILES", bg=BG, fg=ACCENT,
+                 font=('Helvetica', 12, 'bold')).pack(anchor='w')
+        tk.Label(body, text=f"{len(wav_files)} WAV file(s) found in current folder.",
+                 bg=BG, fg=FG, font=('Helvetica', 10)).pack(anchor='w', pady=(6, 12))
+
+        # Format selection
+        tk.Label(body, text="TARGET FORMAT", bg=BG, fg=FG2,
+                 font=('Helvetica', 9, 'bold')).pack(anchor='w', pady=(0, 4))
+        fmt_var = tk.StringVar(value='aiff')
+        tk.Radiobutton(body, text="AIFF — lossless, full tag support (Recommended)",
+                       variable=fmt_var, value='aiff',
+                       bg=BG, fg=FG, selectcolor=BG2, activebackground=BG,
+                       activeforeground=FG, highlightthickness=0,
+                       font=('Helvetica', 10)).pack(anchor='w')
+        tk.Radiobutton(body, text="MP3 — 320 kbps, smaller files",
+                       variable=fmt_var, value='mp3',
+                       bg=BG, fg=FG, selectcolor=BG2, activebackground=BG,
+                       activeforeground=FG, highlightthickness=0,
+                       font=('Helvetica', 10)).pack(anchor='w')
+
+        # AIFF playback warning
+        warn_lbl = tk.Label(body,
+                            text="⚠ Note: AIFF playback is not supported in this app "
+                                 "(pygame limitation).\nYour tags will still be written "
+                                 "and readable in Rekordbox.",
+                            bg=BG, fg="#e67e22", font=('Helvetica', 9),
+                            justify='left', wraplength=430)
+        warn_lbl.pack(anchor='w', pady=(6, 0))
+
+        def _update_warning(*_):
+            if fmt_var.get() == 'aiff':
+                warn_lbl.pack(anchor='w', pady=(6, 0))
+            else:
+                warn_lbl.pack_forget()
+        fmt_var.trace_add('write', _update_warning)
+
+        # Delete originals option
+        del_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(body, text="Delete original WAV files after conversion",
+                       variable=del_var,
+                       bg=BG, fg=FG, selectcolor=BG2, activebackground=BG,
+                       activeforeground=FG, highlightthickness=0,
+                       font=('Helvetica', 10)).pack(anchor='w', pady=(12, 0))
+
+        # Progress
+        progress_lbl = tk.Label(body, text="", bg=BG, fg=FG2,
+                                font=('Helvetica', 10))
+        progress_lbl.pack(anchor='w', pady=(10, 0))
+
+        # Buttons
+        btn_bar = tk.Frame(body, bg=BG)
+        btn_bar.pack(fill='x', pady=(12, 0))
+
+        convert_btn = tk.Button(
+            btn_bar, text="Convert", bg=ACCENT, fg='white',
+            activebackground="#4bbfae", activeforeground='white',
+            relief='flat', padx=20, pady=8, bd=0, highlightthickness=0,
+            font=('Helvetica', 10, 'bold'), cursor='hand2',
+        )
+        convert_btn.pack(side='left')
+
+        def _do_convert():
+            convert_btn.config(state='disabled', text="Converting…")
+            fmt = fmt_var.get()
+            delete = del_var.get()
+
+            # Save any unsaved changes first
+            if self.unsaved:
+                self._save()
+
+            # Stop player and unload to release file handles
+            self._cancel_progress()
+            pygame.mixer.music.stop()
+            pygame.mixer.music.unload()
+
+            def _worker():
+                converted = 0
+                skipped = 0
+                failed = 0
+                total = len(wav_files)
+
+                for i, wav_path in enumerate(wav_files):
+                    self.after(0, lambda i=i, t=total:
+                               progress_lbl.config(
+                                   text=f"Converting {i + 1} / {t}…"))
+                    ext = '.aiff' if fmt == 'aiff' else '.mp3'
+                    out_path = wav_path.with_suffix(ext)
+
+                    if out_path.exists():
+                        skipped += 1
+                        continue
+
+                    try:
+                        seg = AudioSegment.from_wav(str(wav_path))
+                        if fmt == 'mp3':
+                            seg.export(str(out_path), format='mp3',
+                                       bitrate='320k')
+                        else:
+                            seg.export(str(out_path), format='aiff')
+
+                        # Copy all ID3 tags from original to converted file
+                        _copy_id3_tags(wav_path, out_path)
+                        converted += 1
+
+                        if delete:
+                            try:
+                                wav_path.unlink()
+                            except Exception:
+                                pass
+                    except Exception:
+                        failed += 1
+                        # Clean up partial output
+                        if out_path.exists():
+                            try:
+                                out_path.unlink()
+                            except Exception:
+                                pass
+
+                # Update UI on main thread
+                parts = []
+                if converted:
+                    parts.append(f"{converted} converted")
+                if skipped:
+                    parts.append(f"{skipped} skipped (already exist)")
+                if failed:
+                    parts.append(f"{failed} failed")
+                summary = ", ".join(parts) or "Nothing to convert"
+
+                def _done():
+                    progress_lbl.config(text=f"✓ {summary}")
+                    convert_btn.config(state='normal', text="Convert")
+                    self._reload_files()
+
+                self.after(0, _done)
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        convert_btn.config(command=_do_convert)
 
 
 if __name__ == '__main__':

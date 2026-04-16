@@ -39,12 +39,13 @@ After tagging, right-click any track in Rekordbox → **Reload Tags** and everyt
 - Tags written to file instantly on save, no library lock-in
 - Untagged tracks marked with `●` in the file list for easy identification
 - **Stats dashboard** (`📊 Stats`) — see how many tracks are tagged, energy/rating distribution, and top tags by frequency
+- **WAV converter** (`🔄 Convert WAVs`) — batch convert WAV files to AIFF (recommended) or MP3 with full tag preservation
 
 ---
 
 ## Installation
 
-Requires Python 3.8+.
+Requires Python 3.8+. [ffmpeg](https://ffmpeg.org/) is required for the WAV converter and waveform display.
 
 ```bash
 pip install -r requirements.txt
