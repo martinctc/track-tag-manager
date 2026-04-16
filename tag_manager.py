@@ -188,6 +188,12 @@ class App(tk.Tk):
         self.tag_btns    = {}
         self.stats_win   = None
 
+        # Render diff tracking — _SENTINEL forces full render on first call
+        self._SENTINEL     = object()
+        self._prev_energy  = self._SENTINEL
+        self._prev_rating  = self._SENTINEL
+        self._prev_comments = set()
+
         # Player state
         self.p_state    = 'stopped'   # 'stopped' | 'playing' | 'paused'
         self.p_duration = 0.0
@@ -198,6 +204,9 @@ class App(tk.Tk):
         self._wave_ids  = []          # canvas item IDs for waveform bars
         self._head_id   = None        # canvas item ID for playhead line
         self._last_fill = -1          # last filled bar index for incremental updates
+        self._canvas_w  = 0           # cached canvas dimensions
+        self._canvas_h  = 0
+        self._resize_job = None       # debounce handle for canvas resize
 
         pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
 
@@ -463,6 +472,8 @@ class App(tk.Tk):
         self._last_fill = -1
         w = c.winfo_width()
         h = c.winfo_height()
+        self._canvas_w = w
+        self._canvas_h = h
         if w < 4 or h < 4:
             return
         mid = h // 2
@@ -482,8 +493,8 @@ class App(tk.Tk):
 
     def _draw_progress(self, frac):
         c = self.prog_canvas
-        w = c.winfo_width()
-        h = c.winfo_height()
+        w = self._canvas_w
+        h = self._canvas_h
         if w < 4 or h < 4:
             return
         frac = max(0.0, min(1.0, frac))
@@ -514,6 +525,12 @@ class App(tk.Tk):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_canvas_resize(self):
+        if self._resize_job:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(80, self._do_canvas_resize)
+
+    def _do_canvas_resize(self):
+        self._resize_job = None
         self._build_waveform()
         self._draw_progress(self._pos_fraction())
 
@@ -656,8 +673,8 @@ class App(tk.Tk):
             key=lambda f: f.name.lower(),
         )
         self.listbox.delete(0, 'end')
-        for f in self.files:
-            self.listbox.insert('end', f.name)
+        if self.files:
+            self.listbox.insert('end', *[f.name for f in self.files])
         self.status_lbl.config(text=f"{len(self.files)} tracks")
         if self.files:
             self._select(0)
@@ -666,7 +683,8 @@ class App(tk.Tk):
         if not self.files or not (0 <= idx < len(self.files)):
             return
         if self.unsaved:
-            self._save()
+            if not self._save(resume_playback=False):
+                return
         self.idx = idx
         self.listbox.selection_clear(0, 'end')
         self.listbox.selection_set(idx)
@@ -683,18 +701,25 @@ class App(tk.Tk):
         rating   = self.tags.get('rating')
         comments = self.tags.get('comments', set())
 
-        for lv, btn in self.energy_btns.items():
-            btn.config(bg=ENERGY_COLORS[lv] if lv == energy else BG3,
-                       fg='white' if lv == energy else FG2)
+        if energy != self._prev_energy:
+            for lv, btn in self.energy_btns.items():
+                btn.config(bg=ENERGY_COLORS[lv] if lv == energy else BG3,
+                           fg='white' if lv == energy else FG2)
+            self._prev_energy = energy
 
-        for r, btn in self.rating_btns.items():
-            btn.config(bg=ACCENT if r == rating else BG3,
-                       fg='white' if r == rating else FG2)
+        if rating != self._prev_rating:
+            for r, btn in self.rating_btns.items():
+                btn.config(bg=ACCENT if r == rating else BG3,
+                           fg='white' if r == rating else FG2)
+            self._prev_rating = rating
 
         for tag, btn in self.tag_btns.items():
             on = tag in comments
-            btn.config(bg=ACCENT if on else BG3,
-                       fg='white' if on else FG)
+            was_on = tag in self._prev_comments
+            if on != was_on:
+                btn.config(bg=ACCENT if on else BG3,
+                           fg='white' if on else FG)
+        self._prev_comments = set(comments)
 
     # ── Interactions ───────────────────────────────────────────────────────────
 
@@ -735,9 +760,9 @@ class App(tk.Tk):
     def _msg(self, text, color=FG2):
         self.msg_lbl.config(text=text, fg=color)
 
-    def _save(self):
+    def _save(self, resume_playback=True):
         if not self.files:
-            return
+            return True
         path = self.files[self.idx]
         # Remember playback state so we can resume after saving
         was_playing = self.p_state == 'playing'
@@ -755,23 +780,31 @@ class App(tk.Tk):
         )
         if err:
             self._msg(f"Error: {err}", "#e74c3c")
-        else:
-            self.unsaved = False
-            self._msg("✓ saved", ACCENT)
-            self.after(2500, lambda: self._msg("") if not self.unsaved else None)
-        # Resume playback from where we left off
-        if was_playing:
-            self._play_from(resume_pos)
-        elif was_paused:
-            try:
-                pygame.mixer.music.load(str(path))
-                pygame.mixer.music.play(start=float(resume_pos))
-                pygame.mixer.music.pause()
-            except Exception:
-                pygame.mixer.music.load(str(path))
-            self.p_state    = 'paused'
-            self.p_seek_off = resume_pos
-            self.play_btn.config(text="▶")
+            # Reload so user can retry; don't proceed with navigation
+            if was_playing or was_paused:
+                try:
+                    pygame.mixer.music.load(str(path))
+                except Exception:
+                    pass
+            return False
+        self.unsaved = False
+        self._msg("✓ saved", ACCENT)
+        self.after(2500, lambda: self._msg("") if not self.unsaved else None)
+        # Resume playback from where we left off (skip when switching tracks)
+        if resume_playback:
+            if was_playing:
+                self._play_from(resume_pos)
+            elif was_paused:
+                try:
+                    pygame.mixer.music.load(str(path))
+                    pygame.mixer.music.play(start=float(resume_pos))
+                    pygame.mixer.music.pause()
+                except Exception:
+                    pygame.mixer.music.load(str(path))
+                self.p_state    = 'paused'
+                self.p_seek_off = resume_pos
+                self.play_btn.config(text="▶")
+        return True
 
     def _prev(self):
         if self.idx > 0:
@@ -782,8 +815,8 @@ class App(tk.Tk):
             self._select(self.idx + 1)
 
     def _save_next(self):
-        self._save()
-        self._next()
+        if self._save():
+            self._next()
 
     def _on_close(self):
         self._cancel_progress()
