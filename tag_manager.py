@@ -55,13 +55,14 @@ ENERGY_COLORS = {
     "Release": "#d68910",
 }
 
-RATING_POPM = {1: 51, 3: 153, 5: 255}
+RATING_POPM = {1: 1, 3: 128, 5: 255}
+POPM_EMAIL  = 'rekordbox@rekordbox.com'
 
 def _popm_to_stars(val):
     if val == 0:
         return None
     closest = min(RATING_POPM.items(), key=lambda x: abs(x[1] - val))
-    return closest[0] if abs(closest[1] - val) < 40 else None
+    return closest[0]
 
 # ─── Colours ───────────────────────────────────────────────────────────────────
 
@@ -187,7 +188,7 @@ def write_tags(path, energy, rating, comments):
             if k.startswith('POPM'):
                 del t[k]
         if rating and rating in RATING_POPM:
-            t['POPM:no@email'] = POPM(email='no@email',
+            t['POPM:' + POPM_EMAIL] = POPM(email=POPM_EMAIL,
                                        rating=RATING_POPM[rating], count=0)
         audio.save()
         return None
