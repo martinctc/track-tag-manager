@@ -18,13 +18,14 @@ import pygame
 from mutagen.mp3 import MP3
 from mutagen.wave import WAVE
 from mutagen.aiff import AIFF
+from mutagen.flac import FLAC as FLACFile
 from mutagen.id3 import TCON, COMM, POPM
 from pydub import AudioSegment
 
 # ─── Config ────────────────────────────────────────────────────────────────────
 
 DEFAULT_DIR = Path(__file__).parent
-SUPPORTED   = {'.mp3', '.wav', '.aif', '.aiff'}
+SUPPORTED   = {'.mp3', '.wav', '.aif', '.aiff', '.flac'}
 
 ENERGY_LEVELS = ["Start", "Build", "Peak", "Sustain", "Release"]
 RATINGS       = [1, 3, 5]
@@ -79,6 +80,7 @@ def _open(path):
     if ext == '.mp3':              return MP3(path)
     if ext == '.wav':              return WAVE(path)
     if ext in ('.aif', '.aiff'):   return AIFF(path)
+    if ext == '.flac':             return FLACFile(path)
     return None
 
 def read_tags(path):
@@ -86,10 +88,34 @@ def read_tags(path):
         audio = _open(path)
         if audio is None:
             return {}
-        t = audio.tags
+
+        is_flac = path.suffix.lower() == '.flac'
+        t = audio.tags if not is_flac else audio
         if t is None:
             return {'energy': None, 'rating': None, 'comments': set()}
 
+        if is_flac:
+            energy = None
+            genres = t.get('GENRE', [])
+            if genres and genres[0] in ENERGY_LEVELS:
+                energy = genres[0]
+
+            comments = set()
+            comm = t.get('COMMENT', [])
+            if comm and comm[0]:
+                comments = set(comm[0].split())
+
+            rating = None
+            rat = t.get('RATING', [])
+            if rat:
+                try:
+                    rating = _popm_to_stars(int(rat[0]))
+                except (ValueError, TypeError):
+                    pass
+
+            return {'energy': energy, 'rating': rating, 'comments': comments}
+
+        # ID3-based formats (MP3, WAV, AIFF)
         energy = None
         if 'TCON' in t and t['TCON'].text:
             v = str(t['TCON'].text[0])
@@ -118,6 +144,29 @@ def write_tags(path, energy, rating, comments):
         audio = _open(path)
         if audio is None:
             return f"Unsupported format: {path.suffix}"
+
+        is_flac = path.suffix.lower() == '.flac'
+
+        if is_flac:
+            if energy:
+                audio['GENRE'] = [energy]
+            elif 'GENRE' in audio:
+                del audio['GENRE']
+
+            if 'COMMENT' in audio:
+                del audio['COMMENT']
+            if comments:
+                audio['COMMENT'] = [' '.join(sorted(comments))]
+
+            if 'RATING' in audio:
+                del audio['RATING']
+            if rating and rating in RATING_POPM:
+                audio['RATING'] = [str(RATING_POPM[rating])]
+
+            audio.save()
+            return None
+
+        # ID3-based formats (MP3, WAV, AIFF)
         if audio.tags is None:
             audio.add_tags()
         t = audio.tags
@@ -189,6 +238,28 @@ def _copy_id3_tags(src_path, dst_path):
     for key in src_tags.keys():
         dst.tags[key] = src_tags[key]
     dst.save()
+
+
+def _copy_tags_to_flac(src_path, dst_path):
+    """Copy ID3 tags from a source audio file to a FLAC file (VorbisComment)."""
+    src = _open(src_path)
+    if src is None or src.tags is None:
+        return
+    flac = FLACFile(dst_path)
+    t = src.tags
+    if 'TCON' in t and t['TCON'].text:
+        flac['GENRE'] = t['TCON'].text
+    for k in t.keys():
+        if k.startswith('COMM'):
+            text = t[k].text[0] if t[k].text else ''
+            if text:
+                flac['COMMENT'] = [text]
+            break
+    for k in t.keys():
+        if k.startswith('POPM'):
+            flac['RATING'] = [str(t[k].rating)]
+            break
+    flac.save()
 
 # ─── App ───────────────────────────────────────────────────────────────────────
 
@@ -1068,21 +1139,26 @@ class App(tk.Tk):
         # Format selection
         tk.Label(body, text="TARGET FORMAT", bg=BG, fg=FG2,
                  font=('Helvetica', 9, 'bold')).pack(anchor='w', pady=(0, 4))
-        fmt_var = tk.StringVar(value='aiff')
-        tk.Radiobutton(body, text="AIFF — lossless, full tag support (Recommended)",
+        fmt_var = tk.StringVar(value='flac')
+        tk.Radiobutton(body, text="FLAC — lossless, compact, full tag support (Recommended)",
+                       variable=fmt_var, value='flac',
+                       bg=BG, fg=FG, selectcolor=BG2, activebackground=BG,
+                       activeforeground=FG, highlightthickness=0,
+                       font=('Helvetica', 10)).pack(anchor='w')
+        tk.Radiobutton(body, text="AIFF — lossless, full tag support, large files",
                        variable=fmt_var, value='aiff',
                        bg=BG, fg=FG, selectcolor=BG2, activebackground=BG,
                        activeforeground=FG, highlightthickness=0,
                        font=('Helvetica', 10)).pack(anchor='w')
-        tk.Radiobutton(body, text="MP3 — 320 kbps, smaller files",
+        tk.Radiobutton(body, text="MP3 — 320 kbps, smallest files, lossy",
                        variable=fmt_var, value='mp3',
                        bg=BG, fg=FG, selectcolor=BG2, activebackground=BG,
                        activeforeground=FG, highlightthickness=0,
                        font=('Helvetica', 10)).pack(anchor='w')
 
-        # AIFF playback warning
+        # Playback warning (shown for FLAC and AIFF)
         warn_lbl = tk.Label(body,
-                            text="⚠ Note: AIFF playback is not supported in this app "
+                            text="⚠ Note: FLAC/AIFF playback is not supported in this app "
                                  "(pygame limitation).\nYour tags will still be written "
                                  "and readable in Rekordbox.",
                             bg=BG, fg="#e67e22", font=('Helvetica', 9),
@@ -1090,7 +1166,7 @@ class App(tk.Tk):
         warn_lbl.pack(anchor='w', pady=(6, 0))
 
         def _update_warning(*_):
-            if fmt_var.get() == 'aiff':
+            if fmt_var.get() in ('aiff', 'flac'):
                 warn_lbl.pack(anchor='w', pady=(6, 0))
             else:
                 warn_lbl.pack_forget()
@@ -1145,8 +1221,8 @@ class App(tk.Tk):
                     self.after(0, lambda i=i, t=total:
                                progress_lbl.config(
                                    text=f"Converting {i + 1} / {t}…"))
-                    ext = '.aiff' if fmt == 'aiff' else '.mp3'
-                    out_path = wav_path.with_suffix(ext)
+                    ext_map = {'flac': '.flac', 'aiff': '.aiff', 'mp3': '.mp3'}
+                    out_path = wav_path.with_suffix(ext_map[fmt])
 
                     if out_path.exists():
                         skipped += 1
@@ -1157,11 +1233,16 @@ class App(tk.Tk):
                         if fmt == 'mp3':
                             seg.export(str(out_path), format='mp3',
                                        bitrate='320k')
+                        elif fmt == 'flac':
+                            seg.export(str(out_path), format='flac')
                         else:
                             seg.export(str(out_path), format='aiff')
 
-                        # Copy all ID3 tags from original to converted file
-                        _copy_id3_tags(wav_path, out_path)
+                        # Copy tags from original to converted file
+                        if fmt == 'flac':
+                            _copy_tags_to_flac(wav_path, out_path)
+                        else:
+                            _copy_id3_tags(wav_path, out_path)
                         converted += 1
 
                         if delete:
