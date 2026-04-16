@@ -22,6 +22,10 @@ This tool writes standard ID3 tags directly into MP3, WAV, and AIFF files:
 
 After tagging, right-click any track in Rekordbox → **Reload Tags** and everything comes through.
 
+> ⚠️ **WAV limitation:** Rekordbox does not read comment tags (`COMM`) from WAV files — only Genre and Rating will show up. This is a Rekordbox limitation, not a bug in this tool. **MP3 and AIFF files work fully.** If you need comment tags visible in Rekordbox, consider converting your WAVs to AIFF (same lossless quality, but with full ID3 tag support).
+>
+> **Windows File Explorer** also does not display ID3 comment tags reliably. Use a tool like [Mp3tag](https://www.mp3tag.de/en/) to verify tags outside of DJ software.
+
 ---
 
 ## Features
@@ -70,11 +74,13 @@ The included `DJ Tagging Reference.md` documents the default tag vocabulary — 
 
 ## Format support
 
-| Format | Playback | Tagging |
-|---|---|---|
-| MP3 | ✅ | ✅ |
-| WAV | ✅ | ✅ |
-| AIFF | ❌ (pygame limitation) | ✅ |
+| Format | Playback | Tagging | Rekordbox Comment tags |
+|---|---|---|---|
+| MP3 | ✅ | ✅ | ✅ |
+| WAV | ✅ | ✅ | ❌ (Genre & Rating only) |
+| AIFF | ❌ (pygame limitation) | ✅ | ✅ |
+
+For best Rekordbox compatibility, **AIFF is the recommended lossless format** — it supports full ID3 metadata including comments, unlike WAV.
 
 ---
 
