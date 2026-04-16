@@ -674,10 +674,25 @@ class App(tk.Tk):
         )
         self.listbox.delete(0, 'end')
         if self.files:
-            self.listbox.insert('end', *[f.name for f in self.files])
+            self.listbox.insert('end', *[self._list_label(f) for f in self.files])
         self.status_lbl.config(text=f"{len(self.files)} tracks")
         if self.files:
             self._select(0)
+
+    def _is_tagged(self, path):
+        """Check whether a track has any tags (energy, rating, or comments)."""
+        t = read_tags(path)
+        return bool(t.get('energy') or t.get('rating') or t.get('comments'))
+
+    def _list_label(self, path):
+        """Return the listbox display text — prefixed with ● if untagged."""
+        return f"{path.name}" if self._is_tagged(path) else f"●  {path.name}"
+
+    def _update_list_label(self, idx):
+        """Refresh a single listbox entry after tagging."""
+        label = self._list_label(self.files[idx])
+        self.listbox.delete(idx)
+        self.listbox.insert(idx, label)
 
     def _select(self, idx):
         if not self.files or not (0 <= idx < len(self.files)):
@@ -789,6 +804,8 @@ class App(tk.Tk):
             return False
         self.unsaved = False
         self._msg("✓ saved", ACCENT)
+        self._update_list_label(self.idx)
+        self.listbox.selection_set(self.idx)
         self.after(2500, lambda: self._msg("") if not self.unsaved else None)
         # Resume playback from where we left off (skip when switching tracks)
         if resume_playback:
