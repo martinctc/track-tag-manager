@@ -30,6 +30,8 @@ SUPPORTED   = {'.mp3', '.wav', '.aif', '.aiff', '.flac'}
 ENERGY_LEVELS = ["Start", "Build", "Peak", "Sustain", "Release"]
 RATINGS       = [1, 3, 5]
 RATING_LABELS = {1: "1★  Situational", 3: "3★  Reliable", 5: "5★  Essential"}
+RATING_COMMENT = {1: "1★", 3: "3★", 5: "5★"}
+_RATING_COMMENTS = set(RATING_COMMENT.values())
 
 COMMENT_TAGS = {
     "Style":       ["House", "Disco", "Funk", "Pop", "Hip-Hop", "R&B",
@@ -84,6 +86,16 @@ def _open(path):
     if ext == '.flac':             return FLACFile(path)
     return None
 
+def _extract_rating_from_comments(comments):
+    """Extract and remove rating comment tags (e.g. '3★') from a comment set."""
+    found = comments & _RATING_COMMENTS
+    comments -= _RATING_COMMENTS
+    if found:
+        for r, label in RATING_COMMENT.items():
+            if label in found:
+                return r
+    return None
+
 def read_tags(path):
     try:
         audio = _open(path)
@@ -114,6 +126,11 @@ def read_tags(path):
                 except (ValueError, TypeError):
                     pass
 
+            # Also check for rating in comments (fallback)
+            comment_rating = _extract_rating_from_comments(comments)
+            if rating is None:
+                rating = comment_rating
+
             return {'energy': energy, 'rating': rating, 'comments': comments}
 
         # ID3-based formats (MP3, WAV, AIFF)
@@ -136,6 +153,11 @@ def read_tags(path):
                 rating = _popm_to_stars(t[k].rating)
                 break
 
+        # Also check for rating in comments (fallback)
+        comment_rating = _extract_rating_from_comments(comments)
+        if rating is None:
+            rating = comment_rating
+
         return {'energy': energy, 'rating': rating, 'comments': comments}
     except Exception as e:
         return {'energy': None, 'rating': None, 'comments': set(), '_err': str(e)}
@@ -148,6 +170,13 @@ def write_tags(path, energy, rating, comments):
 
         is_flac = path.suffix.lower() == '.flac'
 
+        # Build the full comment string: user tags + rating comment
+        all_comments = set(comments) if comments else set()
+        all_comments -= _RATING_COMMENTS  # strip any old rating comments
+        if rating and rating in RATING_COMMENT:
+            all_comments.add(RATING_COMMENT[rating])
+        comment_str = ' '.join(sorted(all_comments)) if all_comments else ''
+
         if is_flac:
             if energy:
                 audio['GENRE'] = [energy]
@@ -156,8 +185,8 @@ def write_tags(path, energy, rating, comments):
 
             if 'COMMENT' in audio:
                 del audio['COMMENT']
-            if comments:
-                audio['COMMENT'] = [' '.join(sorted(comments))]
+            if comment_str:
+                audio['COMMENT'] = [comment_str]
 
             if 'RATING' in audio:
                 del audio['RATING']
@@ -180,9 +209,9 @@ def write_tags(path, energy, rating, comments):
         for k in list(t.keys()):
             if k.startswith('COMM'):
                 del t[k]
-        if comments:
+        if comment_str:
             t['COMM::eng'] = COMM(encoding=3, lang='eng', desc='',
-                                   text=[' '.join(sorted(comments))])
+                                   text=[comment_str])
 
         for k in list(t.keys()):
             if k.startswith('POPM'):
@@ -248,18 +277,36 @@ def _copy_tags_to_flac(src_path, dst_path):
         return
     flac = FLACFile(dst_path)
     t = src.tags
+
     if 'TCON' in t and t['TCON'].text:
         flac['GENRE'] = t['TCON'].text
+
+    # Build comment string including rating
+    comment_parts = set()
     for k in t.keys():
         if k.startswith('COMM'):
             text = t[k].text[0] if t[k].text else ''
             if text:
-                flac['COMMENT'] = [text]
+                comment_parts = set(text.split())
             break
+
+    rating_val = None
     for k in t.keys():
         if k.startswith('POPM'):
-            flac['RATING'] = [str(t[k].rating)]
+            rating_val = t[k].rating
+            flac['RATING'] = [str(rating_val)]
             break
+
+    # Add rating comment tag for Rekordbox visibility
+    comment_parts -= _RATING_COMMENTS
+    if rating_val:
+        stars = _popm_to_stars(rating_val)
+        if stars and stars in RATING_COMMENT:
+            comment_parts.add(RATING_COMMENT[stars])
+
+    if comment_parts:
+        flac['COMMENT'] = [' '.join(sorted(comment_parts))]
+
     flac.save()
 
 # ─── App ───────────────────────────────────────────────────────────────────────
