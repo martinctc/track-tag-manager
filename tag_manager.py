@@ -2,7 +2,7 @@
 """
 DJ Tag Manager — Little Data Lotta Love system
 Writes Genre (energy), Rating, and Comment tags directly into audio files.
-Supports MP3, WAV, AIFF.
+Supports MP3, WAV, AIFF, FLAC, M4A.
 
 Keys:  Space = play/pause   S = save   Enter = save+next   Up/Down = navigate
 """
@@ -19,13 +19,14 @@ from mutagen.mp3 import MP3
 from mutagen.wave import WAVE
 from mutagen.aiff import AIFF
 from mutagen.flac import FLAC as FLACFile
+from mutagen.mp4 import MP4
 from mutagen.id3 import TCON, COMM, POPM
 from pydub import AudioSegment
 
 # ─── Config ────────────────────────────────────────────────────────────────────
 
 DEFAULT_DIR = Path(__file__).parent
-SUPPORTED   = {'.mp3', '.wav', '.aif', '.aiff', '.flac'}
+SUPPORTED   = {'.mp3', '.wav', '.aif', '.aiff', '.flac', '.m4a'}
 
 ENERGY_LEVELS = ["Start", "Build", "Peak", "Sustain", "Release"]
 RATINGS       = [1, 3, 5]
@@ -84,6 +85,7 @@ def _open(path):
     if ext == '.wav':              return WAVE(path)
     if ext in ('.aif', '.aiff'):   return AIFF(path)
     if ext == '.flac':             return FLACFile(path)
+    if ext == '.m4a':              return MP4(path)
     return None
 
 def _extract_rating_from_comments(comments):
@@ -102,7 +104,33 @@ def read_tags(path):
         if audio is None:
             return {}
 
-        is_flac = path.suffix.lower() == '.flac'
+        ext = path.suffix.lower()
+        is_flac = ext == '.flac'
+        is_m4a = ext == '.m4a'
+
+        if is_m4a:
+            t = audio.tags
+            if t is None:
+                return {'energy': None, 'rating': None, 'comments': set()}
+
+            energy = None
+            genres = t.get('\xa9gen', [])
+            if genres and genres[0] in ENERGY_LEVELS:
+                energy = genres[0]
+
+            comments = set()
+            comm = t.get('\xa9cmt', [])
+            if comm and comm[0]:
+                comments = set(comm[0].split())
+
+            # M4A has no standard rating field — extract from comments
+            rating = None
+            comment_rating = _extract_rating_from_comments(comments)
+            if comment_rating is not None:
+                rating = comment_rating
+
+            return {'energy': energy, 'rating': rating, 'comments': comments}
+
         t = audio.tags if not is_flac else audio
         if t is None:
             return {'energy': None, 'rating': None, 'comments': set()}
@@ -168,7 +196,9 @@ def write_tags(path, energy, rating, comments):
         if audio is None:
             return f"Unsupported format: {path.suffix}"
 
-        is_flac = path.suffix.lower() == '.flac'
+        ext = path.suffix.lower()
+        is_flac = ext == '.flac'
+        is_m4a = ext == '.m4a'
 
         # Build the full comment string: user tags + rating comment
         all_comments = set(comments) if comments else set()
@@ -176,6 +206,26 @@ def write_tags(path, energy, rating, comments):
         if rating and rating in RATING_COMMENT:
             all_comments.add(RATING_COMMENT[rating])
         comment_str = ' '.join(sorted(all_comments)) if all_comments else ''
+
+        if is_m4a:
+            t = audio.tags
+            if t is None:
+                audio.add_tags()
+                t = audio.tags
+
+            if energy:
+                t['\xa9gen'] = [energy]
+            elif '\xa9gen' in t:
+                del t['\xa9gen']
+
+            if '\xa9cmt' in t:
+                del t['\xa9cmt']
+            if comment_str:
+                t['\xa9cmt'] = [comment_str]
+
+            # No standard rating field in M4A — rating is in the comment string
+            audio.save()
+            return None
 
         if is_flac:
             if energy:
@@ -711,8 +761,10 @@ class App(tk.Tk):
         except Exception as e:
             self.p_state = 'stopped'
             self.play_btn.config(text="▶")
-            if path.suffix.lower() in ('.aif', '.aiff'):
-                self._msg("AIFF playback not supported — tags still work fine", FG2)
+            if path.suffix.lower() in ('.aif', '.aiff', '.flac'):
+                self._msg("AIFF/FLAC playback not supported — tags still work fine", FG2)
+            elif path.suffix.lower() == '.m4a':
+                self._msg("M4A playback not supported — tags still work fine", FG2)
             else:
                 self._msg(f"Playback error: {e}", "#e74c3c")
 

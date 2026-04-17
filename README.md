@@ -12,13 +12,13 @@ Built for the [Little Data Lotta Love](https://www.reddit.com/r/DJs/comments/1br
 
 DJ software like Rekordbox stores custom tags (My Tags, cue points, etc.) in its own database — not in the audio file. Switch computers, re-import a track, or share files with another DJ and those tags are gone.
 
-This tool writes standard metadata tags directly into MP3, WAV, AIFF, and FLAC files:
+This tool writes standard metadata tags directly into MP3, WAV, AIFF, FLAC, and M4A files:
 
-| Field | ID3 formats (MP3/WAV/AIFF) | FLAC (VorbisComment) | Rekordbox field |
-|---|---|---|---|
-| Energy level | `TCON` (Genre) | `GENRE` | Genre |
-| Rating | `POPM` (Popularimeter) | `RATING` | Rating |
-| Style / Mood / Vibe / etc. | `COMM` (Comment) | `COMMENT` | Comment |
+| Field | ID3 formats (MP3/WAV/AIFF) | FLAC (VorbisComment) | M4A (MP4 atoms) | Rekordbox field |
+|---|---|---|---|---|
+| Energy level | `TCON` (Genre) | `GENRE` | `©gen` | Genre |
+| Rating | `POPM` (Popularimeter) | `RATING` | ★ in Comment | Rating |
+| Style / Mood / Vibe / etc. | `COMM` (Comment) | `COMMENT` | `©cmt` | Comment |
 
 After tagging, right-click any track in Rekordbox → **Reload Tags** and everything comes through.
 
@@ -80,6 +80,7 @@ The included `DJ Tagging Reference.md` documents the default tag vocabulary — 
 | MP3 | ✅ | ✅ | ✅ |
 | FLAC | ❌ (pygame limitation) | ✅ | ✅ |
 | AIFF | ❌ (pygame limitation) | ✅ | ✅ |
+| M4A | ❌ (pygame limitation) | ✅ | ✅ |
 | WAV | ✅ | ✅ | ❌ (Genre & Rating only) |
 
 For best Rekordbox compatibility, **FLAC is the recommended lossless format** — it supports full metadata including comments, and produces smaller files than both WAV and AIFF.
