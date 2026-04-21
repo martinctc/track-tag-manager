@@ -39,6 +39,7 @@ After tagging, right-click any track in Rekordbox → **Reload Tags** and everyt
 - Tags written to file instantly on save, no library lock-in
 - Untagged tracks marked with `●` in the file list for easy identification
 - **Stats dashboard** (`📊 Stats`) — see how many tracks are tagged, energy/rating distribution, and top tags by frequency
+- **Tag editor** (`🏷️ Tags`) — add, rename, reorder, recolor, or delete energy levels and comment tags / categories from inside the app. Changes persist to `tags.json` and apply to the live palette without restart. Tracks already tagged with a removed/renamed tag show those values in a per-track **LEGACY** section so you can clear them with one click.
 - **WAV converter** (`🔄 Convert WAVs`) — batch convert WAV files to FLAC (recommended), AIFF, or MP3 with full tag preservation
 
 ---
@@ -56,7 +57,9 @@ python tag_manager.py
 
 ## Tagging system
 
-The included `DJ Tagging Reference.md` documents the default tag vocabulary — feel free to customise it to your own style. The vocabulary is defined in `tag_manager.py` under `COMMENT_TAGS` and is easy to edit.
+The included `DJ Tagging Reference.md` documents the default tag vocabulary — feel free to customise it to your own style.
+
+The live vocabulary is stored in `tags.json` (created on first launch from the defaults baked into `tag_manager.py`). The easiest way to edit it is the in-app **🏷️ Tags** editor, which lets you add, rename, reorder, recolor, and delete energy levels and comment tags/categories without touching code. You can also edit `tags.json` directly if you prefer.
 
 **Default categories:**
 

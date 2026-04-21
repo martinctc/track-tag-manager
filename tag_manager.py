@@ -8,8 +8,9 @@ Keys:  Space = play/pause   S = save   Enter = save+next   Up/Down = navigate
 """
 
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, simpledialog, messagebox, colorchooser
 from pathlib import Path
+import json
 import time
 import audioop
 import shutil
@@ -28,13 +29,17 @@ from pydub import AudioSegment
 DEFAULT_DIR = Path(__file__).parent
 SUPPORTED   = {'.mp3', '.wav', '.aif', '.aiff', '.flac', '.m4a'}
 
-ENERGY_LEVELS = ["Start", "Build", "Peak", "Sustain", "Release"]
 RATINGS       = [1, 3, 5]
 RATING_LABELS = {1: "1★  Situational", 3: "3★  Reliable", 5: "5★  Essential"}
 RATING_COMMENT = {1: "1★", 3: "3★", 5: "5★"}
 _RATING_COMMENTS = set(RATING_COMMENT.values())
 
-COMMENT_TAGS = {
+# Default vocabulary — used as the fallback when tags.json is missing or invalid.
+# Live values are loaded into ENERGY_LEVELS / COMMENT_TAGS / ENERGY_COLORS below
+# and can be edited via the in-app Tags editor.
+DEFAULT_ENERGY_LEVELS = ["Start", "Build", "Peak", "Sustain", "Release"]
+
+DEFAULT_COMMENT_TAGS = {
     "Style":       ["House", "Disco", "Funk", "Pop", "Hip-Hop", "R&B",
                     "Latin", "Afro", "Electronic", "Soul",
                     "Arabic", "Desi", "East-Asian",
@@ -50,13 +55,89 @@ COMMENT_TAGS = {
                     "Synth", "Percussion", "Organ"],
 }
 
-ENERGY_COLORS = {
+DEFAULT_ENERGY_COLORS = {
     "Start":   "#2d8659",
     "Build":   "#2471a3",
     "Peak":    "#c0392b",
     "Sustain": "#7d3c98",
     "Release": "#d68910",
 }
+
+# Live (mutable) vocabulary — read by the rest of the app. Populated by load_tag_config().
+ENERGY_LEVELS = list(DEFAULT_ENERGY_LEVELS)
+COMMENT_TAGS  = {k: list(v) for k, v in DEFAULT_COMMENT_TAGS.items()}
+ENERGY_COLORS = dict(DEFAULT_ENERGY_COLORS)
+
+TAG_CONFIG_PATH = DEFAULT_DIR / "tags.json"
+
+
+def save_tag_config():
+    """Write the current live vocabulary to tags.json."""
+    data = {
+        "energy_levels": list(ENERGY_LEVELS),
+        "energy_colors": {k: ENERGY_COLORS.get(k, "#888888") for k in ENERGY_LEVELS},
+        "comment_tags":  {k: list(v) for k, v in COMMENT_TAGS.items()},
+    }
+    try:
+        TAG_CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding='utf-8')
+    except Exception as e:
+        print(f"[tags] failed to write {TAG_CONFIG_PATH}: {e}")
+
+
+def load_tag_config():
+    """Load vocabulary from tags.json into the live globals.
+    On first run (file missing) write defaults so the file is self-documenting.
+    Malformed files are ignored and defaults are kept in memory."""
+    if not TAG_CONFIG_PATH.exists():
+        save_tag_config()
+        return
+    try:
+        data = json.loads(TAG_CONFIG_PATH.read_text(encoding='utf-8'))
+    except Exception as e:
+        print(f"[tags] could not parse {TAG_CONFIG_PATH}: {e} — using defaults")
+        return
+
+    levels = data.get("energy_levels")
+    colors = data.get("energy_colors")
+    tags   = data.get("comment_tags")
+
+    if isinstance(levels, list) and all(isinstance(x, str) and x.strip() for x in levels):
+        ENERGY_LEVELS[:] = [x.strip() for x in levels]
+
+    if isinstance(colors, dict):
+        ENERGY_COLORS.clear()
+        for k, v in colors.items():
+            if isinstance(k, str) and isinstance(v, str):
+                ENERGY_COLORS[k] = v
+        # Ensure every level has a color; fall back to defaults / accent.
+        for lv in ENERGY_LEVELS:
+            ENERGY_COLORS.setdefault(lv, DEFAULT_ENERGY_COLORS.get(lv, "#888888"))
+
+    if isinstance(tags, dict):
+        new_tags = {}
+        for cat, vals in tags.items():
+            if isinstance(cat, str) and isinstance(vals, list):
+                cleaned = [v.strip() for v in vals
+                           if isinstance(v, str) and v.strip()]
+                # de-dupe while preserving order
+                seen = set()
+                unique = []
+                for v in cleaned:
+                    if v not in seen:
+                        seen.add(v)
+                        unique.append(v)
+                new_tags[cat.strip()] = unique
+        if new_tags:
+            COMMENT_TAGS.clear()
+            COMMENT_TAGS.update(new_tags)
+
+
+load_tag_config()
+
+
+def normalize_tag_name(name):
+    """Trim and hyphenate internal whitespace (matches DJ Tagging Reference convention)."""
+    return '-'.join(name.strip().split())
 
 RATING_POPM = {1: 1, 3: 128, 5: 255}
 POPM_EMAIL  = 'rekordbox@rekordbox.com'
@@ -377,6 +458,10 @@ class App(tk.Tk):
         self.energy_btns = {}
         self.rating_btns = {}
         self.tag_btns    = {}
+        self.legacy_btns = {}
+        self.tag_palette_frame = None
+        self.legacy_frame = None
+        self.tag_editor_win = None
         self.stats_win   = None
         self.convert_win = None
 
@@ -385,6 +470,7 @@ class App(tk.Tk):
         self._prev_energy  = self._SENTINEL
         self._prev_rating  = self._SENTINEL
         self._prev_comments = set()
+        self._prev_legacy_sig = None
 
         # Player state
         self.p_state    = 'stopped'   # 'stopped' | 'playing' | 'paused'
@@ -428,6 +514,13 @@ class App(tk.Tk):
             relief='flat', padx=10, pady=4, bd=0, highlightthickness=0,
             font=('Helvetica', 9), cursor='hand2',
             command=self._show_stats,
+        ).pack(side='right', padx=(8, 0))
+        tk.Button(
+            hdr, text="🏷️ Tags",
+            bg=BG3, fg=FG, activebackground=BG3, activeforeground=FG,
+            relief='flat', padx=10, pady=4, bd=0, highlightthickness=0,
+            font=('Helvetica', 9), cursor='hand2',
+            command=self._show_tag_editor,
         ).pack(side='right', padx=(8, 0))
         tk.Button(
             hdr, text="🔄 Convert WAVs",
@@ -498,8 +591,61 @@ class App(tk.Tk):
 
         self._build_energy(sf)
         self._build_rating(sf)
+        self.tag_palette_frame = tk.Frame(sf, bg=BG)
+        self.tag_palette_frame.pack(fill='x', anchor='w')
+        self._build_tag_groups(self.tag_palette_frame)
+
+        # Legacy section sits below the editable palette and is populated per-track
+        # in _render_legacy() with any tags/energy on the current track that are
+        # no longer in the live vocabulary.
+        self.legacy_frame = tk.Frame(sf, bg=BG)
+        self.legacy_frame.pack(fill='x', anchor='w')
+
+    def _build_tag_groups(self, parent):
+        """(Re)build the comment-tag category rows inside `parent`."""
         for cat, tags in COMMENT_TAGS.items():
-            self._build_tag_group(sf, cat, tags)
+            self._build_tag_group(parent, cat, tags)
+
+    def _rebuild_tag_palette(self):
+        """Tear down and rebuild the comment-tag category rows after a config edit."""
+        if not self.tag_palette_frame:
+            return
+        for w in self.tag_palette_frame.winfo_children():
+            w.destroy()
+        self.tag_btns.clear()
+        self._build_tag_groups(self.tag_palette_frame)
+        # Energy buttons may also need rebuilding if levels/colors changed.
+        # Easiest: rebuild the whole energy row in place too.
+        self._rebuild_energy_row()
+        # Force full re-render of state on the new buttons.
+        self._prev_energy = self._SENTINEL
+        self._prev_comments = set()
+        self._prev_legacy_sig = None
+        self._render()
+
+    def _rebuild_energy_row(self):
+        """Rebuild just the energy button row in place after vocabulary edits."""
+        if not self.energy_btns:
+            return
+        # Find the parent frame of any existing energy button (the row built in _build_energy).
+        any_btn = next(iter(self.energy_btns.values()))
+        row = any_btn.master
+        section_label = row.master  # the scrollable frame `sf`
+        # Remember position by destroying old row and rebuilding inside same parent.
+        for w in row.winfo_children():
+            w.destroy()
+        self.energy_btns.clear()
+        for level in ENERGY_LEVELS:
+            btn = tk.Button(
+                row, text=level, bg=BG3, fg=FG2,
+                relief='flat', padx=18, pady=9,
+                font=('Helvetica', 10, 'bold'), cursor='hand2',
+                activebackground=ENERGY_COLORS.get(level, ACCENT), activeforeground='white',
+                bd=0, highlightthickness=0,
+                command=lambda lv=level: self._click_energy(lv),
+            )
+            btn.pack(side='left', padx=(0, 6))
+            self.energy_btns[level] = btn
 
     def _build_player(self, parent):
         bar = tk.Frame(parent, bg=BG2, padx=12, pady=8)
@@ -937,6 +1083,87 @@ class App(tk.Tk):
                            fg='white' if on else FG)
         self._prev_comments = set(comments)
 
+        self._render_legacy()
+
+    def _render_legacy(self):
+        """Show per-track tags / energy that aren't in the current vocabulary."""
+        if not self.legacy_frame:
+            return
+        energy   = self.tags.get('energy')
+        comments = self.tags.get('comments', set())
+
+        legacy_energy = energy if (energy and energy not in ENERGY_LEVELS) else None
+
+        cur_vocab = set()
+        for vals in COMMENT_TAGS.values():
+            cur_vocab.update(vals)
+        cur_vocab.update(_RATING_COMMENTS)  # rating markers aren't legacy
+        legacy_tags = sorted(c for c in comments if c not in cur_vocab)
+
+        sig = (legacy_energy, tuple(legacy_tags))
+        if sig == self._prev_legacy_sig:
+            return
+        self._prev_legacy_sig = sig
+
+        for w in self.legacy_frame.winfo_children():
+            w.destroy()
+        self.legacy_btns.clear()
+
+        if not legacy_energy and not legacy_tags:
+            return
+
+        tk.Label(self.legacy_frame,
+                 text="LEGACY  (not in current vocabulary — click to clear)",
+                 bg=BG, fg='#e67e22',
+                 font=('Helvetica', 9, 'bold')).pack(anchor='w', pady=(16, 5))
+
+        row = tk.Frame(self.legacy_frame, bg=BG)
+        row.pack(anchor='w')
+
+        if legacy_energy:
+            tk.Button(
+                row, text=f"Energy: {legacy_energy}  ✕",
+                bg='#5a3a1a', fg='white',
+                activebackground='#7a4a20', activeforeground='white',
+                relief='flat', padx=12, pady=7,
+                font=('Helvetica', 10), cursor='hand2',
+                bd=0, highlightthickness=0,
+                command=self._clear_legacy_energy,
+            ).pack(side='left', padx=(0, 5), pady=(0, 4))
+
+        for i, tag in enumerate(legacy_tags):
+            btn = tk.Button(
+                row, text=f"{tag}  ✕",
+                bg='#5a3a1a', fg='white',
+                activebackground='#7a4a20', activeforeground='white',
+                relief='flat', padx=12, pady=7,
+                font=('Helvetica', 10), cursor='hand2',
+                bd=0, highlightthickness=0,
+                command=lambda t=tag: self._clear_legacy_tag(t),
+            )
+            btn.pack(side='left', padx=(0, 5), pady=(0, 4))
+            self.legacy_btns[tag] = btn
+            if (i + 1) % 6 == 0 and (i + 1) < len(legacy_tags):
+                row = tk.Frame(self.legacy_frame, bg=BG)
+                row.pack(anchor='w')
+
+    def _clear_legacy_tag(self, tag):
+        comments = set(self.tags.get('comments', set()))
+        comments.discard(tag)
+        self.tags['comments'] = comments
+        self.unsaved = True
+        self._prev_legacy_sig = None
+        self._render()
+        self._msg(f"Cleared legacy tag: {tag}")
+
+    def _clear_legacy_energy(self):
+        self.tags['energy'] = None
+        self.unsaved = True
+        self._prev_energy = self._SENTINEL
+        self._prev_legacy_sig = None
+        self._render()
+        self._msg("Cleared legacy energy")
+
     # ── Interactions ───────────────────────────────────────────────────────────
 
     def _bind_keys(self):
@@ -1201,6 +1428,427 @@ class App(tk.Tk):
         if not sorted_tags:
             tk.Label(sf, text="No comment tags found.", bg=BG, fg=FG2,
                      font=('Helvetica', 10, 'italic')).pack(anchor='w', pady=4)
+
+    # ── Tag vocabulary editor ──────────────────────────────────────────────────
+
+    def _show_tag_editor(self):
+        """Open the in-app tag vocabulary editor."""
+        if self.tag_editor_win and self.tag_editor_win.winfo_exists():
+            self.tag_editor_win.lift()
+            self.tag_editor_win.focus_force()
+            return
+
+        win = tk.Toplevel(self)
+        self.tag_editor_win = win
+        win.title("Tag Vocabulary Editor")
+        win.configure(bg=BG)
+        win.geometry("780x720")
+        win.minsize(620, 480)
+
+        # Working state — deep copies so Cancel really cancels.
+        self._te_levels = list(ENERGY_LEVELS)
+        self._te_colors = {k: ENERGY_COLORS.get(k, DEFAULT_ENERGY_COLORS.get(k, "#888888"))
+                           for k in self._te_levels}
+        self._te_cats = list(COMMENT_TAGS.keys())
+        self._te_tags_by_cat = {k: list(v) for k, v in COMMENT_TAGS.items()}
+
+        # Header
+        hdr = tk.Frame(win, bg=BG)
+        hdr.pack(fill='x', padx=14, pady=(12, 6))
+        tk.Label(hdr, text="TAG VOCABULARY", bg=BG, fg=ACCENT,
+                 font=('Helvetica', 13, 'bold')).pack(side='left')
+        tk.Label(hdr,
+                 text="Edits apply to the live palette and are saved to tags.json",
+                 bg=BG, fg=FG2, font=('Helvetica', 9, 'italic')).pack(side='left', padx=(12, 0))
+
+        # Scrollable body
+        body = tk.Frame(win, bg=BG)
+        body.pack(fill='both', expand=True, padx=14, pady=4)
+        canvas = tk.Canvas(body, bg=BG, highlightthickness=0)
+        sb = tk.Scrollbar(body, orient='vertical', command=canvas.yview)
+        sf = tk.Frame(canvas, bg=BG)
+        sf.bind('<Configure>',
+                lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=sf, anchor='nw')
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+        canvas.bind('<MouseWheel>',
+                    lambda e: canvas.yview_scroll(-1 * (e.delta // 120), 'units'))
+        self._te_body = sf
+
+        # Footer
+        footer = tk.Frame(win, bg=BG)
+        footer.pack(fill='x', padx=14, pady=(6, 12))
+        tk.Button(footer, text="Save & Apply",
+                  bg=ACCENT, fg='white',
+                  activebackground='#4bbfae', activeforeground='white',
+                  relief='flat', padx=18, pady=8, bd=0, highlightthickness=0,
+                  font=('Helvetica', 10, 'bold'), cursor='hand2',
+                  command=self._te_save).pack(side='right', padx=(8, 0))
+        tk.Button(footer, text="Cancel",
+                  bg=BG3, fg=FG,
+                  activebackground=BG3, activeforeground=FG,
+                  relief='flat', padx=18, pady=8, bd=0, highlightthickness=0,
+                  font=('Helvetica', 10), cursor='hand2',
+                  command=win.destroy).pack(side='right')
+
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        self._te_render()
+
+    # ── Editor render & helpers ────────────────────────────────────────────────
+
+    def _te_render(self):
+        """Rebuild the editor body from the working state."""
+        if not self._te_body or not self._te_body.winfo_exists():
+            return
+        for w in self._te_body.winfo_children():
+            w.destroy()
+
+        # ENERGY LEVELS
+        tk.Label(self._te_body, text="ENERGY LEVELS", bg=BG, fg=FG2,
+                 font=('Helvetica', 9, 'bold')).pack(anchor='w', pady=(8, 4))
+        tk.Label(self._te_body,
+                 text="Order matters — levels appear left-to-right in the track editor.",
+                 bg=BG, fg=FG2, font=('Helvetica', 9, 'italic')).pack(anchor='w', pady=(0, 6))
+
+        for i, lv in enumerate(self._te_levels):
+            self._te_level_row(self._te_body, i, lv)
+
+        tk.Button(self._te_body, text="+ Add energy level",
+                  bg=BG3, fg=FG, activebackground=BG3, activeforeground=FG,
+                  relief='flat', padx=12, pady=6, bd=0, highlightthickness=0,
+                  font=('Helvetica', 9), cursor='hand2',
+                  command=self._te_add_level).pack(anchor='w', pady=(4, 12))
+
+        # COMMENT CATEGORIES
+        tk.Label(self._te_body, text="COMMENT TAG CATEGORIES", bg=BG, fg=FG2,
+                 font=('Helvetica', 9, 'bold')).pack(anchor='w', pady=(8, 4))
+
+        for ci, cat in enumerate(self._te_cats):
+            self._te_category_block(self._te_body, ci, cat)
+
+        tk.Button(self._te_body, text="+ Add category",
+                  bg=BG3, fg=FG, activebackground=BG3, activeforeground=FG,
+                  relief='flat', padx=12, pady=6, bd=0, highlightthickness=0,
+                  font=('Helvetica', 9), cursor='hand2',
+                  command=self._te_add_category).pack(anchor='w', pady=(4, 16))
+
+    def _te_level_row(self, parent, i, lv):
+        row = tk.Frame(parent, bg=BG2, padx=8, pady=4)
+        row.pack(fill='x', pady=2)
+        # Reorder
+        tk.Button(row, text="▲", width=2, bg=BG3, fg=FG,
+                  relief='flat', bd=0, highlightthickness=0,
+                  font=('Helvetica', 9), cursor='hand2',
+                  command=lambda: self._te_move_level(i, -1)
+                  ).pack(side='left', padx=(0, 2))
+        tk.Button(row, text="▼", width=2, bg=BG3, fg=FG,
+                  relief='flat', bd=0, highlightthickness=0,
+                  font=('Helvetica', 9), cursor='hand2',
+                  command=lambda: self._te_move_level(i, +1)
+                  ).pack(side='left', padx=(0, 8))
+
+        # Color swatch
+        color = self._te_colors.get(lv, "#888888")
+        sw = tk.Button(row, text="    ", bg=color,
+                       activebackground=color,
+                       relief='flat', bd=1, highlightthickness=1,
+                       highlightbackground=FG2, cursor='hand2',
+                       command=lambda: self._te_pick_color(lv))
+        sw.pack(side='left', padx=(0, 8))
+
+        tk.Label(row, text=lv, bg=BG2, fg=FG,
+                 font=('Helvetica', 11), width=14, anchor='w').pack(side='left')
+
+        tk.Button(row, text="✕", width=2, bg=BG3, fg='#e74c3c',
+                  relief='flat', bd=0, highlightthickness=0,
+                  font=('Helvetica', 10), cursor='hand2',
+                  command=lambda: self._te_delete_level(i)
+                  ).pack(side='right', padx=(4, 0))
+        tk.Button(row, text="Rename", bg=BG3, fg=FG,
+                  relief='flat', bd=0, highlightthickness=0,
+                  padx=8, pady=2,
+                  font=('Helvetica', 9), cursor='hand2',
+                  command=lambda: self._te_rename_level(i)
+                  ).pack(side='right', padx=(4, 0))
+
+    def _te_category_block(self, parent, ci, cat):
+        block = tk.Frame(parent, bg=BG, padx=0, pady=4)
+        block.pack(fill='x', pady=(8, 0))
+
+        head = tk.Frame(block, bg=BG)
+        head.pack(fill='x')
+        tk.Button(head, text="▲", width=2, bg=BG3, fg=FG,
+                  relief='flat', bd=0, highlightthickness=0,
+                  font=('Helvetica', 9), cursor='hand2',
+                  command=lambda: self._te_move_category(ci, -1)
+                  ).pack(side='left', padx=(0, 2))
+        tk.Button(head, text="▼", width=2, bg=BG3, fg=FG,
+                  relief='flat', bd=0, highlightthickness=0,
+                  font=('Helvetica', 9), cursor='hand2',
+                  command=lambda: self._te_move_category(ci, +1)
+                  ).pack(side='left', padx=(0, 8))
+        tk.Label(head, text=cat, bg=BG, fg=ACCENT,
+                 font=('Helvetica', 11, 'bold')).pack(side='left')
+        tk.Button(head, text="✕ Delete category", bg=BG3, fg='#e74c3c',
+                  relief='flat', bd=0, highlightthickness=0,
+                  padx=8, pady=2, font=('Helvetica', 9), cursor='hand2',
+                  command=lambda: self._te_delete_category(ci)
+                  ).pack(side='right', padx=(4, 0))
+        tk.Button(head, text="Rename", bg=BG3, fg=FG,
+                  relief='flat', bd=0, highlightthickness=0,
+                  padx=8, pady=2, font=('Helvetica', 9), cursor='hand2',
+                  command=lambda: self._te_rename_category(ci)
+                  ).pack(side='right', padx=(4, 0))
+
+        tags = self._te_tags_by_cat.get(cat, [])
+        body = tk.Frame(block, bg=BG2, padx=10, pady=6)
+        body.pack(fill='x', pady=(4, 0))
+        if not tags:
+            tk.Label(body, text="(no tags yet)", bg=BG2, fg=FG2,
+                     font=('Helvetica', 9, 'italic')).pack(anchor='w')
+        for ti, tag in enumerate(tags):
+            self._te_tag_row(body, cat, ti, tag)
+
+        tk.Button(body, text="+ Add tag", bg=BG3, fg=FG,
+                  relief='flat', bd=0, highlightthickness=0,
+                  padx=10, pady=4, font=('Helvetica', 9), cursor='hand2',
+                  command=lambda: self._te_add_tag(cat)
+                  ).pack(anchor='w', pady=(6, 0))
+
+    def _te_tag_row(self, parent, cat, ti, tag):
+        row = tk.Frame(parent, bg=BG2)
+        row.pack(fill='x', pady=1)
+        tk.Button(row, text="▲", width=2, bg=BG3, fg=FG,
+                  relief='flat', bd=0, highlightthickness=0,
+                  font=('Helvetica', 9), cursor='hand2',
+                  command=lambda: self._te_move_tag(cat, ti, -1)
+                  ).pack(side='left', padx=(0, 2))
+        tk.Button(row, text="▼", width=2, bg=BG3, fg=FG,
+                  relief='flat', bd=0, highlightthickness=0,
+                  font=('Helvetica', 9), cursor='hand2',
+                  command=lambda: self._te_move_tag(cat, ti, +1)
+                  ).pack(side='left', padx=(0, 8))
+        tk.Label(row, text=tag, bg=BG2, fg=FG,
+                 font=('Helvetica', 10), anchor='w').pack(side='left')
+        tk.Button(row, text="✕", width=2, bg=BG2, fg='#e74c3c',
+                  activebackground=BG3,
+                  relief='flat', bd=0, highlightthickness=0,
+                  font=('Helvetica', 10), cursor='hand2',
+                  command=lambda: self._te_delete_tag(cat, ti)
+                  ).pack(side='right', padx=(4, 0))
+        tk.Button(row, text="Rename", bg=BG2, fg=FG2,
+                  activebackground=BG3,
+                  relief='flat', bd=0, highlightthickness=0,
+                  padx=6, pady=1, font=('Helvetica', 9), cursor='hand2',
+                  command=lambda: self._te_rename_tag(cat, ti)
+                  ).pack(side='right', padx=(4, 0))
+
+    # ── Energy level mutations ─────────────────────────────────────────────────
+
+    def _te_move_level(self, i, delta):
+        j = i + delta
+        if not (0 <= j < len(self._te_levels)):
+            return
+        self._te_levels[i], self._te_levels[j] = self._te_levels[j], self._te_levels[i]
+        self._te_render()
+
+    def _te_pick_color(self, lv):
+        cur = self._te_colors.get(lv, "#888888")
+        result = colorchooser.askcolor(color=cur, parent=self.tag_editor_win,
+                                        title=f"Color for {lv}")
+        if result and result[1]:
+            self._te_colors[lv] = result[1]
+            self._te_render()
+
+    def _te_rename_level(self, i):
+        old = self._te_levels[i]
+        new = simpledialog.askstring("Rename energy level",
+                                      f"Rename '{old}' to:",
+                                      initialvalue=old,
+                                      parent=self.tag_editor_win)
+        if not new:
+            return
+        new = normalize_tag_name(new)
+        if not new or new == old:
+            return
+        if new in self._te_levels:
+            messagebox.showerror("Duplicate", f"Energy level '{new}' already exists.",
+                                  parent=self.tag_editor_win)
+            return
+        self._te_levels[i] = new
+        if old in self._te_colors:
+            self._te_colors[new] = self._te_colors.pop(old)
+        self._te_render()
+
+    def _te_delete_level(self, i):
+        lv = self._te_levels[i]
+        if not messagebox.askyesno("Delete energy level",
+                                    f"Delete '{lv}'?\n\nExisting tracks tagged with this energy will show it as a legacy entry until cleared.",
+                                    parent=self.tag_editor_win):
+            return
+        del self._te_levels[i]
+        self._te_colors.pop(lv, None)
+        self._te_render()
+
+    def _te_add_level(self):
+        new = simpledialog.askstring("Add energy level", "Name:",
+                                      parent=self.tag_editor_win)
+        if not new:
+            return
+        new = normalize_tag_name(new)
+        if not new:
+            return
+        if new in self._te_levels:
+            messagebox.showerror("Duplicate", f"Energy level '{new}' already exists.",
+                                  parent=self.tag_editor_win)
+            return
+        self._te_levels.append(new)
+        self._te_colors[new] = DEFAULT_ENERGY_COLORS.get(new, ACCENT)
+        self._te_render()
+
+    # ── Category mutations ─────────────────────────────────────────────────────
+
+    def _te_move_category(self, ci, delta):
+        j = ci + delta
+        if not (0 <= j < len(self._te_cats)):
+            return
+        self._te_cats[ci], self._te_cats[j] = self._te_cats[j], self._te_cats[ci]
+        self._te_render()
+
+    def _te_rename_category(self, ci):
+        old = self._te_cats[ci]
+        new = simpledialog.askstring("Rename category",
+                                      f"Rename category '{old}' to:",
+                                      initialvalue=old,
+                                      parent=self.tag_editor_win)
+        if not new:
+            return
+        new = new.strip()
+        if not new or new == old:
+            return
+        if new in self._te_cats:
+            messagebox.showerror("Duplicate", f"Category '{new}' already exists.",
+                                  parent=self.tag_editor_win)
+            return
+        self._te_cats[ci] = new
+        self._te_tags_by_cat[new] = self._te_tags_by_cat.pop(old, [])
+        self._te_render()
+
+    def _te_delete_category(self, ci):
+        cat = self._te_cats[ci]
+        n = len(self._te_tags_by_cat.get(cat, []))
+        warn = (f"Delete category '{cat}' and its {n} tag(s)?\n\n"
+                "Existing tracks tagged with these will show them as legacy entries until cleared.")
+        if not messagebox.askyesno("Delete category", warn, parent=self.tag_editor_win):
+            return
+        del self._te_cats[ci]
+        self._te_tags_by_cat.pop(cat, None)
+        self._te_render()
+
+    def _te_add_category(self):
+        new = simpledialog.askstring("Add category", "Category name:",
+                                      parent=self.tag_editor_win)
+        if not new:
+            return
+        new = new.strip()
+        if not new:
+            return
+        if new in self._te_cats:
+            messagebox.showerror("Duplicate", f"Category '{new}' already exists.",
+                                  parent=self.tag_editor_win)
+            return
+        self._te_cats.append(new)
+        self._te_tags_by_cat[new] = []
+        self._te_render()
+
+    # ── Tag mutations ──────────────────────────────────────────────────────────
+
+    def _te_move_tag(self, cat, ti, delta):
+        tags = self._te_tags_by_cat.get(cat, [])
+        j = ti + delta
+        if not (0 <= j < len(tags)):
+            return
+        tags[ti], tags[j] = tags[j], tags[ti]
+        self._te_render()
+
+    def _te_rename_tag(self, cat, ti):
+        tags = self._te_tags_by_cat.get(cat, [])
+        old = tags[ti]
+        new = simpledialog.askstring("Rename tag",
+                                      f"Rename '{old}' to:",
+                                      initialvalue=old,
+                                      parent=self.tag_editor_win)
+        if not new:
+            return
+        new = normalize_tag_name(new)
+        if not new or new == old:
+            return
+        if new in tags:
+            messagebox.showerror("Duplicate", f"Tag '{new}' already exists in '{cat}'.",
+                                  parent=self.tag_editor_win)
+            return
+        tags[ti] = new
+        self._te_render()
+
+    def _te_delete_tag(self, cat, ti):
+        tags = self._te_tags_by_cat.get(cat, [])
+        tag = tags[ti]
+        if not messagebox.askyesno("Delete tag",
+                                    f"Delete '{tag}' from '{cat}'?\n\nExisting tracks tagged with this will show it as a legacy entry until cleared.",
+                                    parent=self.tag_editor_win):
+            return
+        del tags[ti]
+        self._te_render()
+
+    def _te_add_tag(self, cat):
+        new = simpledialog.askstring("Add tag", f"New tag in '{cat}':",
+                                      parent=self.tag_editor_win)
+        if not new:
+            return
+        new = normalize_tag_name(new)
+        if not new:
+            return
+        tags = self._te_tags_by_cat.setdefault(cat, [])
+        if new in tags:
+            messagebox.showerror("Duplicate", f"Tag '{new}' already exists in '{cat}'.",
+                                  parent=self.tag_editor_win)
+            return
+        # Also warn if the tag exists in another category — same string would collide.
+        for other_cat, other_tags in self._te_tags_by_cat.items():
+            if other_cat != cat and new in other_tags:
+                if not messagebox.askyesno(
+                        "Duplicate across categories",
+                        f"'{new}' already exists in category '{other_cat}'. "
+                        "Comment tags share a flat namespace in the file — adding it here "
+                        "as well will not let you distinguish them. Add anyway?",
+                        parent=self.tag_editor_win):
+                    return
+                break
+        tags.append(new)
+        self._te_render()
+
+    # ── Save ───────────────────────────────────────────────────────────────────
+
+    def _te_save(self):
+        if not self._te_levels:
+            messagebox.showerror("Validation", "At least one energy level is required.",
+                                  parent=self.tag_editor_win)
+            return
+        # Commit working state to live globals
+        ENERGY_LEVELS[:] = list(self._te_levels)
+        ENERGY_COLORS.clear()
+        for lv in ENERGY_LEVELS:
+            ENERGY_COLORS[lv] = self._te_colors.get(lv, DEFAULT_ENERGY_COLORS.get(lv, ACCENT))
+        COMMENT_TAGS.clear()
+        for cat in self._te_cats:
+            COMMENT_TAGS[cat] = list(self._te_tags_by_cat.get(cat, []))
+        save_tag_config()
+        self._rebuild_tag_palette()
+        self._msg("Tag vocabulary updated", ACCENT)
+        if self.tag_editor_win and self.tag_editor_win.winfo_exists():
+            self.tag_editor_win.destroy()
 
     # ── WAV converter ──────────────────────────────────────────────────────────
 
