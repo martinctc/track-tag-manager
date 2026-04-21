@@ -6,3 +6,6 @@ build/
 .env
 .venv/
 venv/
+
+# Local tag vocabulary — generated from defaults on first run and edited per-user
+tags.json
