@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>DJ Tag Manager — Tag every track. Survive every library.</title>
+  <meta name="description" content="A lightweight DJ tagging GUI that writes metadata directly into your audio files — so your tags survive re-imports, library moves, and new DJ setups.">
+  <meta property="og:title" content="DJ Tag Manager">
+  <meta property="og:description" content="Tag every track. Survive every library. Lightweight DJ tagging GUI for Rekordbox, Engine DJ, Serato and beyond.">
+  <meta property="og:type" content="website">
+  <meta name="theme-color" content="#0a0a0a">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230a0a0a'/><g fill='%235cbfb0'><rect x='5'  y='12' width='2' height='8'/><rect x='9'  y='8'  width='2' height='16'/><rect x='13' y='4'  width='2' height='24'/><rect x='17' y='10' width='2' height='12'/><rect x='21' y='6'  width='2' height='20'/><rect x='25' y='13' width='2' height='6'/></g></svg>">
+</head>
+<body>
+
+<!-- ── NAV ──────────────────────────────────────────────────────────────── -->
+<header class="nav">
+  <a href="#" class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="22" height="22"><g fill="currentColor"><rect x="5" y="12" width="2" height="8"/><rect x="9" y="8" width="2" height="16"/><rect x="13" y="4" width="2" height="24"/><rect x="17" y="10" width="2" height="12"/><rect x="21" y="6" width="2" height="20"/><rect x="25" y="13" width="2" height="6"/></g></svg>
+    </span>
+    <span class="brand-name">DJ TAG MANAGER</span>
+  </a>
+  <nav class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#vocabulary">Vocabulary</a>
+    <a href="#workflow">Workflow</a>
+    <a href="#install">Install</a>
+    <a href="https://github.com/martinctc/track-tag-manager" class="nav-cta">GitHub ↗</a>
+  </nav>
+</header>
+
+<!-- ── HERO ─────────────────────────────────────────────────────────────── -->
+<section class="hero">
+  <div class="hero-bg" aria-hidden="true"></div>
+  <div class="hero-grid" aria-hidden="true"></div>
+  <div class="hero-inner">
+    <p class="eyebrow">Open source · MIT · Python</p>
+    <h1 class="hero-title">
+      <span class="line">Tag every track.</span>
+      <span class="line accent">Survive every library.</span>
+    </h1>
+    <p class="hero-sub">
+      A lightweight DJ tagging GUI that writes metadata <strong>directly into your audio files</strong> —
+      so your tags survive re-imports, library moves, and new DJ setups.
+    </p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="https://github.com/martinctc/track-tag-manager">
+        <span>View on GitHub</span><span class="btn-arrow">→</span>
+      </a>
+      <a class="btn btn-ghost" href="#install">Install in 2 commands</a>
+    </div>
+    <div class="hero-meta">
+      <span class="dot dot-on"></span>
+      <span>Works with Rekordbox, Engine DJ, Serato, Traktor — anything that reads ID3 / Vorbis / MP4 tags</span>
+    </div>
+  </div>
+
+  <div class="hero-wave" aria-hidden="true">
+    <div class="wave-bars" id="wave"></div>
+    <div class="wave-line"></div>
+  </div>
+</section>
+
+<!-- ── WHY STRIP ────────────────────────────────────────────────────────── -->
+<section class="strip">
+  <div class="strip-grid">
+    <div class="strip-item">
+      <div class="strip-num">01</div>
+      <h3>Tags live in the file</h3>
+      <p>Standard ID3, VorbisComment and MP4 atoms — not a proprietary database. Move the file, keep the tags.</p>
+    </div>
+    <div class="strip-item">
+      <div class="strip-num">02</div>
+      <h3>Library-agnostic</h3>
+      <p>Switch from Rekordbox to Engine DJ tomorrow. Your energy, ratings and vibe tags come along for the ride.</p>
+    </div>
+    <div class="strip-item">
+      <div class="strip-num">03</div>
+      <h3>Instant Reload</h3>
+      <p>Right-click → Reload Tags in Rekordbox and everything you tagged appears. No re-import, no rebuild.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── FEATURES ─────────────────────────────────────────────────────────── -->
+<section id="features" class="section">
+  <div class="container">
+    <p class="eyebrow">Features</p>
+    <h2 class="section-title">Built for the way DJs actually prep.</h2>
+    <p class="section-sub">Keyboard-first. No mouse hunting. Tag a folder of forty tracks in one sitting without losing your flow.</p>
+
+    <div class="features-grid">
+      <article class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h2l2-7 3 14 3-10 3 7 2-3h3"/></svg>
+        </div>
+        <h3>Waveform player</h3>
+        <p>Click-to-seek waveform with playhead and time display. Hear the track, tag the track.</p>
+      </article>
+
+      <article class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg>
+        </div>
+        <h3>Keyboard-first workflow</h3>
+        <p><kbd>Space</kbd> play · <kbd>S</kbd> save · <kbd>↵</kbd> save+next · <kbd>↑↓</kbd> navigate. Stay on the home row.</p>
+      </article>
+
+      <article class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12V8a2 2 0 0 0-2-2h-5l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h6"/><circle cx="17" cy="17" r="4"/><path d="m20 20 2 2"/></svg>
+        </div>
+        <h3>In-app tag editor</h3>
+        <p>Add, rename, recolor or reorder energy levels and tag categories without touching code. Saves to <code>tags.json</code>.</p>
+      </article>
+
+      <article class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        </div>
+        <h3>Legacy tag rescue</h3>
+        <p>Rename a tag and existing files keep their old strings. The legacy panel lets you spot and clear them per-track.</p>
+      </article>
+
+      <article class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><rect x="5" y="13" width="3" height="6"/><rect x="11" y="9" width="3" height="10"/><rect x="17" y="5" width="3" height="14"/></svg>
+        </div>
+        <h3>Stats dashboard</h3>
+        <p>See how many tracks are tagged, energy/rating distribution and which tags you actually use.</p>
+      </article>
+
+      <article class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+        </div>
+        <h3>WAV → FLAC converter</h3>
+        <p>Batch-convert WAVs to FLAC, AIFF or MP3 with full tag preservation. Built in.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ── VOCABULARY ───────────────────────────────────────────────────────── -->
+<section id="vocabulary" class="section section-alt">
+  <div class="container">
+    <p class="eyebrow">The vocabulary</p>
+    <h2 class="section-title">A tagging system tuned for sets, not spreadsheets.</h2>
+    <p class="section-sub">Built for the <a href="https://www.reddit.com/r/DJs/comments/1brgng/little_data_lotta_love_a_beginners_guide_to/" target="_blank" rel="noopener">Little Data Lotta Love</a> philosophy. Three to seven tags per track. Searchable. Mixable. Yours to customise.</p>
+
+    <div class="vocab-block">
+      <div class="vocab-label">ENERGY · GENRE FIELD</div>
+      <div class="chips">
+        <span class="chip energy" style="--ec:#2d8659">Start</span>
+        <span class="chip energy" style="--ec:#2471a3">Build</span>
+        <span class="chip energy" style="--ec:#c0392b">Peak</span>
+        <span class="chip energy" style="--ec:#7d3c98">Sustain</span>
+        <span class="chip energy" style="--ec:#d68910">Release</span>
+      </div>
+    </div>
+
+    <div class="vocab-block">
+      <div class="vocab-label">RATING · POPM</div>
+      <div class="chips">
+        <span class="chip rating">★ Situational</span>
+        <span class="chip rating">★★★ Reliable</span>
+        <span class="chip rating">★★★★★ Essential</span>
+      </div>
+    </div>
+
+    <div class="vocab-block">
+      <div class="vocab-label">STYLE</div>
+      <div class="chips">
+        <span class="chip">House</span><span class="chip">Disco</span><span class="chip">Funk</span>
+        <span class="chip">Pop</span><span class="chip">Hip-Hop</span><span class="chip">R&amp;B</span>
+        <span class="chip">Latin</span><span class="chip">Afro</span><span class="chip">Electronic</span>
+        <span class="chip">Soul</span><span class="chip">Techno</span><span class="chip">DnB</span>
+      </div>
+    </div>
+
+    <div class="vocab-block">
+      <div class="vocab-label">MOOD · VIBE · CROWD</div>
+      <div class="chips">
+        <span class="chip">Happy</span><span class="chip">Chill</span><span class="chip">Dark</span>
+        <span class="chip">Uplifting</span><span class="chip">Groovy</span><span class="chip">Driving</span>
+        <span class="chip">Anthemic</span><span class="chip">Deep</span><span class="chip">Late-Night</span>
+        <span class="chip">Singalong</span><span class="chip">Dancefloor</span><span class="chip">Beach-Vibes</span>
+        <span class="chip">Cafe-Set</span>
+      </div>
+    </div>
+
+    <p class="vocab-foot">Customise everything in the in-app editor — the defaults are just a starting point.</p>
+  </div>
+</section>
+
+<!-- ── WORKFLOW ─────────────────────────────────────────────────────────── -->
+<section id="workflow" class="section">
+  <div class="container">
+    <p class="eyebrow">Workflow</p>
+    <h2 class="section-title">Download. Tag. Convert. Mix.</h2>
+
+    <ol class="flow">
+      <li>
+        <span class="flow-num">01</span>
+        <h4>Collect</h4>
+        <p>Drop your fresh purchases into a prep folder. WAV, MP3, FLAC, AIFF, M4A — any mix.</p>
+      </li>
+      <li>
+        <span class="flow-num">02</span>
+        <h4>Tag</h4>
+        <p>Open the folder. Preview each track in the built-in player. Hit the energy, rating and vibe buttons.</p>
+      </li>
+      <li>
+        <span class="flow-num">03</span>
+        <h4>Convert</h4>
+        <p>One click batch-converts WAV → FLAC. Tags preserved, file sizes shrunk, Rekordbox-ready.</p>
+      </li>
+      <li>
+        <span class="flow-num">04</span>
+        <h4>Mix</h4>
+        <p>Import into Rekordbox / Engine / Serato. Reload tags. Search by mood. Build sets on the fly.</p>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<!-- ── FORMATS ──────────────────────────────────────────────────────────── -->
+<section class="section section-alt">
+  <div class="container">
+    <p class="eyebrow">Format support</p>
+    <h2 class="section-title">Tags everywhere they're supposed to be.</h2>
+
+    <div class="format-table">
+      <div class="ft-row ft-head">
+        <div>Format</div><div>Playback</div><div>Tagging</div><div>Rekordbox Comment Tags</div>
+      </div>
+      <div class="ft-row"><div>MP3</div><div class="ok">✓</div><div class="ok">✓</div><div class="ok">✓</div></div>
+      <div class="ft-row"><div>FLAC</div><div class="warn">—</div><div class="ok">✓</div><div class="ok">✓ <span class="hint">recommended lossless</span></div></div>
+      <div class="ft-row"><div>AIFF</div><div class="warn">—</div><div class="ok">✓</div><div class="ok">✓</div></div>
+      <div class="ft-row"><div>M4A</div><div class="warn">—</div><div class="ok">✓</div><div class="ok">✓</div></div>
+      <div class="ft-row"><div>WAV</div><div class="ok">✓</div><div class="ok">✓</div><div class="bad">Genre &amp; Rating only</div></div>
+    </div>
+    <p class="format-foot">Use the built-in <code>🔄 Convert WAVs</code> tool to upgrade WAV files to FLAC and unlock full comment-tag support in Rekordbox.</p>
+  </div>
+</section>
+
+<!-- ── INSTALL / CTA ────────────────────────────────────────────────────── -->
+<section id="install" class="section section-cta">
+  <div class="container">
+    <p class="eyebrow">Get started</p>
+    <h2 class="section-title">Two commands. No accounts. No cloud.</h2>
+
+    <pre class="codeblock"><code><span class="prompt">$</span> git clone https://github.com/martinctc/track-tag-manager
+<span class="prompt">$</span> cd track-tag-manager
+<span class="prompt">$</span> pip install -r requirements.txt
+<span class="prompt">$</span> python tag_manager.py</code></pre>
+
+    <p class="install-note">Requires Python 3.8+ and <a href="https://ffmpeg.org/" target="_blank" rel="noopener">ffmpeg</a> for waveform display and the WAV converter.</p>
+
+    <div class="cta-row">
+      <a class="btn btn-primary btn-lg" href="https://github.com/martinctc/track-tag-manager">
+        <span>Star on GitHub</span><span class="btn-arrow">→</span>
+      </a>
+      <a class="btn btn-ghost btn-lg" href="https://github.com/martinctc/track-tag-manager/blob/main/DJ%20Tagging%20Reference.md">
+        Read the tagging guide
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ── FOOTER ───────────────────────────────────────────────────────────── -->
+<footer class="footer">
+  <div class="container footer-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="18" height="18"><g fill="currentColor"><rect x="5" y="12" width="2" height="8"/><rect x="9" y="8" width="2" height="16"/><rect x="13" y="4" width="2" height="24"/><rect x="17" y="10" width="2" height="12"/><rect x="21" y="6" width="2" height="20"/><rect x="25" y="13" width="2" height="6"/></g></svg>
+      </span>
+      <span class="brand-name">DJ TAG MANAGER</span>
+    </div>
+    <p class="footer-meta">
+      MIT licensed · Built for DJs who actually prep ·
+      <a href="https://github.com/martinctc/track-tag-manager">github.com/martinctc/track-tag-manager</a>
+    </p>
+  </div>
+</footer>
+
+<script src="script.js" defer></script>
+</body>
+</html>
