@@ -4,7 +4,7 @@ A lightweight DJ tagging GUI that writes metadata **directly into your audio fil
 
 Built for the [Little Data Lotta Love](https://www.reddit.com/r/DJs/comments/1brgng/little_data_lotta_love_a_beginners_guide_to/) tagging philosophy: tag every track richly so you can search and build sets on the fly.
 
-![Python](https://img.shields.io/badge/python-3.8%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
@@ -46,7 +46,22 @@ After tagging, right-click any track in Rekordbox → **Reload Tags** and everyt
 
 ## Installation
 
-Requires Python 3.8+. [ffmpeg](https://ffmpeg.org/) is required for the WAV converter and waveform display.
+Requires **Python 3.10+** and **[ffmpeg](https://ffmpeg.org/)** (used for the WAV converter and waveform display).
+
+**Install ffmpeg:**
+
+```bash
+# macOS
+brew install ffmpeg
+
+# Windows
+winget install --id=Gyan.FFmpeg
+
+# Linux (Debian/Ubuntu)
+sudo apt install ffmpeg
+```
+
+**Then:**
 
 ```bash
 pip install -r requirements.txt
@@ -116,6 +131,16 @@ Either order works. Tags are always preserved during conversion.
 > 💡 **Tip:** Tag while previewing — WAV files play directly in the app, so tagging before converting lets you listen and tag in one pass.
 
 ---
+
+## Contributing
+
+PRs and issues welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup and guidelines.
+
+## Reporting bugs
+
+Open an issue with your OS, Python version, and steps to reproduce.
+
+**If you find a bug that corrupts or destroys audio files**, please email the maintainer (see GitHub profile) before opening a public issue, so a fix can ship before others trip over it.
 
 ## License
 

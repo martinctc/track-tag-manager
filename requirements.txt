@@ -1,3 +1,5 @@
-mutagen>=1.45
-pygame>=2.0
-pydub>=0.25
+# Pinned to versions known to work. Bump deliberately and re-test the
+# tag read/write paths and waveform/playback before relaxing.
+mutagen>=1.47,<2.0
+pygame>=2.6,<3.0
+pydub>=0.25,<0.26
