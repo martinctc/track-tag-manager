@@ -1,0 +1,20 @@
+{
+  "_meta": {
+    "name": "Minimal",
+    "author": "track-tag-manager defaults",
+    "description": "A small starter vocabulary — energy, rating, plus Style and Mood. Designed for new users to grow into their own system.",
+    "version": "1.0"
+  },
+  "energy_levels": ["Start", "Build", "Peak", "Sustain", "Release"],
+  "energy_colors": {
+    "Start":   "#2d8659",
+    "Build":   "#2471a3",
+    "Peak":    "#c0392b",
+    "Sustain": "#7d3c98",
+    "Release": "#d68910"
+  },
+  "comment_tags": {
+    "Style": ["House", "Disco", "Pop", "Hip-Hop", "R&B", "Electronic", "Soul", "Latin"],
+    "Mood":  ["Happy", "Chill", "Dark", "Uplifting", "Nostalgic", "Emotional"]
+  }
+}

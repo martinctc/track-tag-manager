@@ -76,3 +76,21 @@ Open an issue with:
 **If you find a bug that corrupts or destroys audio files, please email the
 maintainer (see GitHub profile) before opening a public issue** so we can ship
 a fix before others trip over it.
+
+## Contributing a tag pack
+
+The easiest community contribution: share a tag vocabulary you've built. Two
+paths:
+
+1. **Issue template (no Git needed).** In the app: `🏷️ Tags → 💾 Export pack…`
+   to get a JSON file. Then open the
+   [Submit a tag pack](.github/ISSUE_TEMPLATE/submit-tag-pack.yml) issue and
+   either drag-and-drop the file or paste its contents. A maintainer will
+   commit it to `presets/` on your behalf.
+2. **Direct PR.** Add your file to `presets/`, update the table in
+   `presets/README.md`, and ensure your file's `_meta.name`, `_meta.author`,
+   and `_meta.description` are filled in. Test by loading the pack via
+   `🏷️ Tags → 📥 Load pack… → Browse…` before submitting.
+
+Both routes ship the pack under MIT. See `presets/README.md` for the format,
+filename conventions, and merge rules.

@@ -1,0 +1,24 @@
+{
+  "_meta": {
+    "name": "House & Techno",
+    "author": "track-tag-manager defaults",
+    "description": "Focused electronic vocabulary with subgenre, vibe, and structural tags for long-form mixing.",
+    "version": "1.0"
+  },
+  "energy_levels": ["Warm-Up", "Build", "Peak", "Drive", "Cool-Down"],
+  "energy_colors": {
+    "Warm-Up":   "#2d8659",
+    "Build":     "#2471a3",
+    "Peak":      "#c0392b",
+    "Drive":     "#d68910",
+    "Cool-Down": "#7d3c98"
+  },
+  "comment_tags": {
+    "Style":  ["Deep-House", "Tech-House", "Afro-House", "Minimal", "Techno", "Melodic-Techno", "Progressive", "Trance", "Disco-House", "Garage", "Breakbeat", "Electro"],
+    "Vibe":   ["Hypnotic", "Driving", "Groovy", "Punchy", "Dubby", "Atmospheric", "Acid", "Rolling", "Anthemic", "Stripped"],
+    "Mood":   ["Dark", "Uplifting", "Euphoric", "Hard", "Soulful", "Late-Night"],
+    "Structure": ["Intro-Tool", "Outro-Tool", "Big-Drop", "Long-Build", "Vocal-Hook", "Acapella"],
+    "Vocals": ["Vocals", "No-Vocals", "Spoken"],
+    "Tempo":  ["120", "122", "124", "126", "128", "130", "132", "134", "138"]
+  }
+}

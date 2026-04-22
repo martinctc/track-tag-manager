@@ -11,6 +11,8 @@ import tkinter as tk
 from tkinter import filedialog, simpledialog, messagebox, colorchooser
 from pathlib import Path
 import json
+import re
+import sys
 import time
 import audioop
 import shutil
@@ -67,17 +69,304 @@ DEFAULT_ENERGY_COLORS = {
 ENERGY_LEVELS = list(DEFAULT_ENERGY_LEVELS)
 COMMENT_TAGS  = {k: list(v) for k, v in DEFAULT_COMMENT_TAGS.items()}
 ENERGY_COLORS = dict(DEFAULT_ENERGY_COLORS)
+TAG_META      = {}  # optional: name / author / description / version for the active pack
 
 TAG_CONFIG_PATH = DEFAULT_DIR / "tags.json"
 
+# Reasonable limits — protect the GUI from hostile or accidentally huge packs.
+# Each comment tag becomes a button; thousands would freeze the renderer.
+MAX_PACK_FILE_BYTES   = 256 * 1024
+MAX_ENERGY_LEVELS     = 20
+MAX_CATEGORIES        = 30
+MAX_TAGS_PER_CATEGORY = 100
+MAX_TOTAL_TAGS        = 600
+MAX_NAME_LEN          = 60
+MAX_DESC_LEN          = 500
+_HEX_COLOR_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
+
+# Reserved top-level keys (underscore-prefixed) for forward-compat metadata.
+_META_KEY = "_meta"
+
+
+def _resource_path(name):
+    """Locate a bundled resource (preset, etc.) on disk.
+
+    Works in source checkouts and is defensively forward-compatible with
+    PyInstaller-style packaging via sys._MEIPASS. Returns the path even if
+    the resource doesn't exist — callers should check .exists().
+    """
+    candidates = [DEFAULT_DIR / name]
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        candidates.insert(0, Path(meipass) / name)
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[0]
+
+
+def _is_valid_hex_color(s):
+    return isinstance(s, str) and bool(_HEX_COLOR_RE.match(s))
+
+
+def _clean_meta(raw):
+    """Return a sanitised _meta dict containing only known string fields."""
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key in ("name", "author", "description", "version"):
+        v = raw.get(key)
+        if isinstance(v, str):
+            v = v.strip()
+            if v:
+                limit = MAX_DESC_LEN if key == "description" else MAX_NAME_LEN
+                out[key] = v[:limit]
+    return out
+
+
+def validate_tag_data(data):
+    """Validate and normalise a tag-pack dict.
+
+    Returns (clean, errors, warnings). `clean` is always a dict with keys
+    energy_levels (list), energy_colors (dict), comment_tags (dict),
+    _meta (dict) — any of which may be empty if absent in input. Errors
+    indicate the data is unusable; warnings indicate values were dropped.
+    """
+    errors = []
+    warnings = []
+    clean = {"energy_levels": [], "energy_colors": {}, "comment_tags": {}, _META_KEY: {}}
+
+    if not isinstance(data, dict):
+        errors.append("Top-level value must be a JSON object.")
+        return clean, errors, warnings
+
+    clean[_META_KEY] = _clean_meta(data.get(_META_KEY))
+
+    # Energy levels
+    levels = data.get("energy_levels")
+    if levels is not None:
+        if not isinstance(levels, list):
+            errors.append("'energy_levels' must be a list.")
+        else:
+            seen = set()
+            for x in levels:
+                if not isinstance(x, str):
+                    continue
+                name = x.strip()[:MAX_NAME_LEN]
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                clean["energy_levels"].append(name)
+                if len(clean["energy_levels"]) >= MAX_ENERGY_LEVELS:
+                    warnings.append(
+                        f"Energy levels capped at {MAX_ENERGY_LEVELS}; extras dropped.")
+                    break
+
+    # Energy colors — only accept #RRGGBB
+    colors = data.get("energy_colors")
+    if colors is not None:
+        if not isinstance(colors, dict):
+            errors.append("'energy_colors' must be an object.")
+        else:
+            for k, v in colors.items():
+                if not isinstance(k, str):
+                    continue
+                if _is_valid_hex_color(v):
+                    clean["energy_colors"][k.strip()[:MAX_NAME_LEN]] = v
+                else:
+                    warnings.append(f"Ignored invalid color for '{k}'.")
+
+    # Comment tags
+    tags = data.get("comment_tags")
+    if tags is not None:
+        if not isinstance(tags, dict):
+            errors.append("'comment_tags' must be an object.")
+        else:
+            total = 0
+            cats_used = 0
+            for cat, vals in tags.items():
+                if cats_used >= MAX_CATEGORIES:
+                    warnings.append(
+                        f"Categories capped at {MAX_CATEGORIES}; extras dropped.")
+                    break
+                if not isinstance(cat, str) or not isinstance(vals, list):
+                    continue
+                cat_clean = cat.strip()[:MAX_NAME_LEN]
+                if not cat_clean:
+                    continue
+                seen = set()
+                kept = []
+                for v in vals:
+                    if not isinstance(v, str):
+                        continue
+                    nv = v.strip()[:MAX_NAME_LEN]
+                    if not nv or nv in seen:
+                        continue
+                    seen.add(nv)
+                    kept.append(nv)
+                    total += 1
+                    if len(kept) >= MAX_TAGS_PER_CATEGORY:
+                        warnings.append(
+                            f"'{cat_clean}' capped at {MAX_TAGS_PER_CATEGORY} tags.")
+                        break
+                    if total >= MAX_TOTAL_TAGS:
+                        warnings.append(
+                            f"Total tags capped at {MAX_TOTAL_TAGS}; remainder dropped.")
+                        break
+                clean["comment_tags"][cat_clean] = kept
+                cats_used += 1
+                if total >= MAX_TOTAL_TAGS:
+                    break
+
+    return clean, errors, warnings
+
+
+def read_pack_file(path):
+    """Read and validate a pack JSON file.
+
+    Returns (clean, errors, warnings). Always returns a usable structure
+    even on failure; callers check `errors` to decide whether to apply.
+    """
+    p = Path(path)
+    try:
+        if p.stat().st_size > MAX_PACK_FILE_BYTES:
+            return ({"energy_levels": [], "energy_colors": {}, "comment_tags": {}, _META_KEY: {}},
+                    [f"File is larger than {MAX_PACK_FILE_BYTES // 1024} KB — refusing to load."],
+                    [])
+        data = json.loads(p.read_text(encoding='utf-8'))
+    except OSError as e:
+        return ({"energy_levels": [], "energy_colors": {}, "comment_tags": {}, _META_KEY: {}},
+                [f"Could not read file: {e}"], [])
+    except json.JSONDecodeError as e:
+        return ({"energy_levels": [], "energy_colors": {}, "comment_tags": {}, _META_KEY: {}},
+                [f"Invalid JSON: {e.msg} (line {e.lineno})"], [])
+    return validate_tag_data(data)
+
+
+def apply_pack(state, pack, mode):
+    """Return a NEW state dict with `pack` applied to `state` in given mode.
+
+    `state` and `pack` use the same shape: dict with energy_levels,
+    energy_colors, comment_tags, _meta. `mode` is "replace" or "merge".
+    Never mutates inputs. Also returns a `summary` dict and a list of
+    warnings (e.g. cross-category duplicate tags skipped during merge).
+    """
+    new_state = {
+        "energy_levels":  list(state.get("energy_levels", [])),
+        "energy_colors":  dict(state.get("energy_colors", {})),
+        "comment_tags":   {k: list(v) for k, v in state.get("comment_tags", {}).items()},
+        _META_KEY:        dict(state.get(_META_KEY, {})),
+    }
+    warnings = []
+    summary = {"levels_added": 0, "tags_added": 0, "categories_added": 0,
+               "cross_category_skipped": []}
+
+    if mode == "replace":
+        new_state["energy_levels"] = list(pack.get("energy_levels", []))
+        # Replace colors but only keep ones that map to a known level (post-replace).
+        valid_levels = set(new_state["energy_levels"])
+        new_state["energy_colors"] = {
+            k: v for k, v in pack.get("energy_colors", {}).items()
+            if k in valid_levels and _is_valid_hex_color(v)
+        }
+        new_state["comment_tags"] = {
+            k: list(v) for k, v in pack.get("comment_tags", {}).items()
+        }
+        new_state[_META_KEY] = dict(pack.get(_META_KEY, {}))
+        summary["levels_added"] = len(new_state["energy_levels"])
+        summary["categories_added"] = len(new_state["comment_tags"])
+        summary["tags_added"] = sum(len(v) for v in new_state["comment_tags"].values())
+        return new_state, summary, warnings
+
+    # MERGE
+    existing_levels = set(new_state["energy_levels"])
+    for lv in pack.get("energy_levels", []):
+        if lv not in existing_levels:
+            new_state["energy_levels"].append(lv)
+            existing_levels.add(lv)
+            summary["levels_added"] += 1
+    # Only set colors for levels that don't yet have one (don't clobber user choices).
+    for lv, c in pack.get("energy_colors", {}).items():
+        if lv in existing_levels and lv not in new_state["energy_colors"] and _is_valid_hex_color(c):
+            new_state["energy_colors"][lv] = c
+
+    # Build flat index of existing tag → category for cross-category check.
+    tag_to_cat = {}
+    for cat, vals in new_state["comment_tags"].items():
+        for v in vals:
+            tag_to_cat[v] = cat
+
+    for cat, vals in pack.get("comment_tags", {}).items():
+        target = new_state["comment_tags"].get(cat)
+        if target is None:
+            new_state["comment_tags"][cat] = []
+            target = new_state["comment_tags"][cat]
+            summary["categories_added"] += 1
+        existing_in_cat = set(target)
+        for v in vals:
+            if v in existing_in_cat:
+                continue
+            other = tag_to_cat.get(v)
+            if other is not None and other != cat:
+                # Same string already lives in another category — skip to keep
+                # the flat namespace unambiguous.
+                summary["cross_category_skipped"].append((v, other, cat))
+                continue
+            target.append(v)
+            existing_in_cat.add(v)
+            tag_to_cat[v] = cat
+            summary["tags_added"] += 1
+
+    if summary["cross_category_skipped"]:
+        examples = ", ".join(
+            f"'{t}' (already in '{o}')"
+            for t, o, _ in summary["cross_category_skipped"][:3])
+        more = len(summary["cross_category_skipped"]) - 3
+        warnings.append(
+            f"Skipped {len(summary['cross_category_skipped'])} tag(s) already "
+            f"present in another category: {examples}"
+            + (f" and {more} more." if more > 0 else "."))
+
+    # _meta is intentionally NOT merged — pack metadata describes the pack,
+    # not the user's customised vocabulary. Leave existing _meta alone.
+
+    return new_state, summary, warnings
+
+
+def list_bundled_presets():
+    """Return a list of (path, meta_dict) for valid presets in presets/.
+
+    Skips files that are missing, malformed, or empty. Never raises.
+    """
+    out = []
+    presets_dir = _resource_path("presets")
+    if not presets_dir.exists() or not presets_dir.is_dir():
+        return out
+    try:
+        files = sorted(presets_dir.glob("*.json"))
+    except OSError:
+        return out
+    for f in files:
+        try:
+            clean, errors, _ = read_pack_file(f)
+        except Exception:
+            continue
+        if errors:
+            continue
+        if not (clean["energy_levels"] or clean["comment_tags"]):
+            continue
+        out.append((f, clean.get(_META_KEY, {})))
+    return out
+
 
 def save_tag_config():
-    """Write the current live vocabulary to tags.json."""
-    data = {
-        "energy_levels": list(ENERGY_LEVELS),
-        "energy_colors": {k: ENERGY_COLORS.get(k, "#888888") for k in ENERGY_LEVELS},
-        "comment_tags":  {k: list(v) for k, v in COMMENT_TAGS.items()},
-    }
+    """Write the current live vocabulary to tags.json (with optional _meta)."""
+    data = {}
+    if TAG_META:
+        data[_META_KEY] = dict(TAG_META)
+    data["energy_levels"] = list(ENERGY_LEVELS)
+    data["energy_colors"] = {k: ENERGY_COLORS.get(k, "#888888") for k in ENERGY_LEVELS}
+    data["comment_tags"]  = {k: list(v) for k, v in COMMENT_TAGS.items()}
     try:
         TAG_CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding='utf-8')
     except Exception as e:
@@ -91,45 +380,27 @@ def load_tag_config():
     if not TAG_CONFIG_PATH.exists():
         save_tag_config()
         return
-    try:
-        data = json.loads(TAG_CONFIG_PATH.read_text(encoding='utf-8'))
-    except Exception as e:
-        print(f"[tags] could not parse {TAG_CONFIG_PATH}: {e} — using defaults")
+    clean, errors, warnings = read_pack_file(TAG_CONFIG_PATH)
+    if errors:
+        print(f"[tags] {TAG_CONFIG_PATH}: {'; '.join(errors)} — using defaults")
         return
+    for w in warnings:
+        print(f"[tags] {TAG_CONFIG_PATH}: {w}")
 
-    levels = data.get("energy_levels")
-    colors = data.get("energy_colors")
-    tags   = data.get("comment_tags")
-
-    if isinstance(levels, list) and all(isinstance(x, str) and x.strip() for x in levels):
-        ENERGY_LEVELS[:] = [x.strip() for x in levels]
-
-    if isinstance(colors, dict):
+    if clean["energy_levels"]:
+        ENERGY_LEVELS[:] = clean["energy_levels"]
+    if clean["energy_colors"]:
         ENERGY_COLORS.clear()
-        for k, v in colors.items():
-            if isinstance(k, str) and isinstance(v, str):
-                ENERGY_COLORS[k] = v
-        # Ensure every level has a color; fall back to defaults / accent.
+        for k, v in clean["energy_colors"].items():
+            ENERGY_COLORS[k] = v
         for lv in ENERGY_LEVELS:
             ENERGY_COLORS.setdefault(lv, DEFAULT_ENERGY_COLORS.get(lv, "#888888"))
-
-    if isinstance(tags, dict):
-        new_tags = {}
-        for cat, vals in tags.items():
-            if isinstance(cat, str) and isinstance(vals, list):
-                cleaned = [v.strip() for v in vals
-                           if isinstance(v, str) and v.strip()]
-                # de-dupe while preserving order
-                seen = set()
-                unique = []
-                for v in cleaned:
-                    if v not in seen:
-                        seen.add(v)
-                        unique.append(v)
-                new_tags[cat.strip()] = unique
-        if new_tags:
-            COMMENT_TAGS.clear()
-            COMMENT_TAGS.update(new_tags)
+    if clean["comment_tags"]:
+        COMMENT_TAGS.clear()
+        COMMENT_TAGS.update(clean["comment_tags"])
+    if clean[_META_KEY]:
+        TAG_META.clear()
+        TAG_META.update(clean[_META_KEY])
 
 
 load_tag_config()
@@ -1451,6 +1722,7 @@ class App(tk.Tk):
                            for k in self._te_levels}
         self._te_cats = list(COMMENT_TAGS.keys())
         self._te_tags_by_cat = {k: list(v) for k, v in COMMENT_TAGS.items()}
+        self._te_meta = dict(TAG_META)
 
         # Header
         hdr = tk.Frame(win, bg=BG)
@@ -1460,6 +1732,20 @@ class App(tk.Tk):
         tk.Label(hdr,
                  text="Edits apply to the live palette and are saved to tags.json",
                  bg=BG, fg=FG2, font=('Helvetica', 9, 'italic')).pack(side='left', padx=(12, 0))
+
+        # Pack toolbar — load / export / edit pack info
+        tb = tk.Frame(win, bg=BG)
+        tb.pack(fill='x', padx=14, pady=(0, 6))
+        for label, cmd in [
+            ("📥  Load pack…",  self._te_load_pack),
+            ("💾  Export pack…", self._te_export_pack),
+            ("✏️  Pack info…",  self._te_edit_meta),
+        ]:
+            tk.Button(tb, text=label, bg=BG3, fg=FG,
+                      activebackground=BG3, activeforeground=FG,
+                      relief='flat', padx=10, pady=5, bd=0, highlightthickness=0,
+                      font=('Helvetica', 9), cursor='hand2',
+                      command=cmd).pack(side='left', padx=(0, 6))
 
         # Scrollable body
         body = tk.Frame(win, bg=BG)
@@ -1844,11 +2130,262 @@ class App(tk.Tk):
         COMMENT_TAGS.clear()
         for cat in self._te_cats:
             COMMENT_TAGS[cat] = list(self._te_tags_by_cat.get(cat, []))
+        TAG_META.clear()
+        TAG_META.update(self._te_meta)
         save_tag_config()
         self._rebuild_tag_palette()
         self._msg("Tag vocabulary updated", ACCENT)
         if self.tag_editor_win and self.tag_editor_win.winfo_exists():
             self.tag_editor_win.destroy()
+
+    # ── Pack import / export ───────────────────────────────────────────────────
+
+    def _te_current_state(self):
+        return {
+            "energy_levels":  list(self._te_levels),
+            "energy_colors":  dict(self._te_colors),
+            "comment_tags":   {k: list(v) for k, v in self._te_tags_by_cat.items()},
+            "_meta":          dict(self._te_meta),
+        }
+
+    def _te_apply_state(self, new_state):
+        """Swap working state to a freshly-built state dict (transactional)."""
+        self._te_levels = list(new_state["energy_levels"])
+        self._te_colors = dict(new_state["energy_colors"])
+        # Preserve insertion order from the new state's comment_tags dict.
+        self._te_cats = list(new_state["comment_tags"].keys())
+        self._te_tags_by_cat = {k: list(v) for k, v in new_state["comment_tags"].items()}
+        self._te_meta = dict(new_state.get("_meta", {}))
+        self._te_render()
+
+    def _te_load_pack(self):
+        """Show a chooser of bundled presets + Browse… option."""
+        parent = self.tag_editor_win
+        presets = list_bundled_presets()
+
+        win = tk.Toplevel(parent)
+        win.title("Load tag pack")
+        win.configure(bg=BG)
+        win.geometry("520x420")
+        win.transient(parent)
+
+        tk.Label(win, text="LOAD A TAG PACK", bg=BG, fg=ACCENT,
+                 font=('Helvetica', 12, 'bold')).pack(anchor='w', padx=14, pady=(12, 2))
+        tk.Label(win,
+                 text="Pick a bundled preset or browse to a JSON file you've been sent.",
+                 bg=BG, fg=FG2, font=('Helvetica', 9, 'italic'),
+                 wraplength=480, justify='left').pack(anchor='w', padx=14, pady=(0, 8))
+
+        list_frame = tk.Frame(win, bg=BG)
+        list_frame.pack(fill='both', expand=True, padx=14, pady=4)
+
+        if not presets:
+            tk.Label(list_frame,
+                     text="(No bundled presets found in presets/.)",
+                     bg=BG, fg=FG2, font=('Helvetica', 9, 'italic')
+                     ).pack(anchor='w', pady=8)
+        else:
+            canvas = tk.Canvas(list_frame, bg=BG, highlightthickness=0)
+            sb = tk.Scrollbar(list_frame, orient='vertical', command=canvas.yview)
+            inner = tk.Frame(canvas, bg=BG)
+            inner.bind('<Configure>',
+                       lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+            canvas.create_window((0, 0), window=inner, anchor='nw')
+            canvas.configure(yscrollcommand=sb.set)
+            canvas.pack(side='left', fill='both', expand=True)
+            sb.pack(side='right', fill='y')
+
+            for path, meta in presets:
+                name = meta.get("name") or path.stem
+                desc = meta.get("description") or ""
+                if len(desc) > 140:
+                    desc = desc[:137] + "…"
+                row = tk.Frame(inner, bg=BG2, padx=10, pady=8)
+                row.pack(fill='x', pady=2)
+                tk.Label(row, text=name, bg=BG2, fg=FG,
+                         font=('Helvetica', 10, 'bold')).pack(anchor='w')
+                if desc:
+                    tk.Label(row, text=desc, bg=BG2, fg=FG2,
+                             font=('Helvetica', 9), wraplength=380,
+                             justify='left').pack(anchor='w', pady=(2, 4))
+                btns = tk.Frame(row, bg=BG2)
+                btns.pack(anchor='w')
+                tk.Button(btns, text="Replace…", bg=BG3, fg=FG,
+                          relief='flat', bd=0, highlightthickness=0,
+                          padx=10, pady=4, font=('Helvetica', 9), cursor='hand2',
+                          command=lambda p=path: self._te_load_pack_from_file(p, win, "replace")
+                          ).pack(side='left', padx=(0, 6))
+                tk.Button(btns, text="Merge", bg=BG3, fg=FG,
+                          relief='flat', bd=0, highlightthickness=0,
+                          padx=10, pady=4, font=('Helvetica', 9), cursor='hand2',
+                          command=lambda p=path: self._te_load_pack_from_file(p, win, "merge")
+                          ).pack(side='left')
+
+        bottom = tk.Frame(win, bg=BG)
+        bottom.pack(fill='x', padx=14, pady=(6, 12))
+        tk.Button(bottom, text="📂  Browse for file…", bg=BG3, fg=FG,
+                  relief='flat', bd=0, highlightthickness=0,
+                  padx=12, pady=6, font=('Helvetica', 9), cursor='hand2',
+                  command=lambda: self._te_browse_pack(win)).pack(side='left')
+        tk.Button(bottom, text="Cancel", bg=BG3, fg=FG,
+                  relief='flat', bd=0, highlightthickness=0,
+                  padx=12, pady=6, font=('Helvetica', 9), cursor='hand2',
+                  command=win.destroy).pack(side='right')
+
+    def _te_browse_pack(self, picker_win):
+        path = filedialog.askopenfilename(
+            parent=picker_win,
+            title="Select a tag pack JSON file",
+            filetypes=[("Tag pack JSON", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        # Ask mode
+        choice = messagebox.askyesnocancel(
+            "Apply pack",
+            "How should this pack be applied?\n\n"
+            "Yes  =  Replace your current vocabulary\n"
+            "No   =  Merge into your current vocabulary\n"
+            "Cancel = abort",
+            parent=picker_win)
+        if choice is None:
+            return
+        mode = "replace" if choice else "merge"
+        self._te_load_pack_from_file(Path(path), picker_win, mode)
+
+    def _te_load_pack_from_file(self, path, picker_win, mode):
+        clean, errors, warnings = read_pack_file(path)
+        if errors:
+            messagebox.showerror("Could not load pack",
+                                  "\n".join(errors), parent=picker_win)
+            return
+        if not (clean["energy_levels"] or clean["comment_tags"]):
+            messagebox.showerror("Could not load pack",
+                                  "The file contained no energy levels or tags.",
+                                  parent=picker_win)
+            return
+        new_state, summary, apply_warnings = apply_pack(
+            self._te_current_state(), clean, mode)
+
+        # Confirmation summary.
+        meta_name = clean.get("_meta", {}).get("name") or path.stem
+        bits = []
+        if mode == "replace":
+            bits.append(
+                f"Replace with '{meta_name}': "
+                f"{len(new_state['energy_levels'])} levels, "
+                f"{sum(len(v) for v in new_state['comment_tags'].values())} tags "
+                f"across {len(new_state['comment_tags'])} categories.")
+        else:
+            bits.append(
+                f"Merge '{meta_name}': adding {summary['levels_added']} energy "
+                f"level(s), {summary['categories_added']} new categor(y/ies), "
+                f"{summary['tags_added']} new tag(s).")
+        for w in warnings + apply_warnings:
+            bits.append("⚠ " + w)
+        bits.append("\nApply now? (Save & Apply in the editor still required to persist.)")
+
+        if not messagebox.askokcancel("Confirm pack", "\n".join(bits), parent=picker_win):
+            return
+
+        self._te_apply_state(new_state)
+        if picker_win and picker_win.winfo_exists():
+            picker_win.destroy()
+        self._msg(f"Pack loaded into editor: {meta_name}", ACCENT)
+
+    def _te_export_pack(self):
+        parent = self.tag_editor_win
+        if not self._te_levels and not self._te_tags_by_cat:
+            messagebox.showinfo("Nothing to export",
+                                 "Add some energy levels or tags first.",
+                                 parent=parent)
+            return
+        suggested = (self._te_meta.get("name") or "my-tag-pack")
+        suggested = re.sub(r'[^a-zA-Z0-9]+', '-', suggested).strip('-').lower() or "tag-pack"
+        path = filedialog.asksaveasfilename(
+            parent=parent,
+            title="Export tag pack",
+            defaultextension=".json",
+            initialfile=f"{suggested}.json",
+            filetypes=[("Tag pack JSON", "*.json")])
+        if not path:
+            return
+        data = {}
+        if self._te_meta:
+            data["_meta"] = dict(self._te_meta)
+        data["energy_levels"] = list(self._te_levels)
+        data["energy_colors"] = {k: self._te_colors.get(k, "#888888")
+                                  for k in self._te_levels}
+        data["comment_tags"] = {k: list(self._te_tags_by_cat.get(k, []))
+                                  for k in self._te_cats}
+        try:
+            Path(path).write_text(json.dumps(data, indent=2), encoding='utf-8')
+        except OSError as e:
+            messagebox.showerror("Export failed", str(e), parent=parent)
+            return
+        self._msg(f"Exported pack: {Path(path).name}", ACCENT)
+
+    def _te_edit_meta(self):
+        parent = self.tag_editor_win
+        win = tk.Toplevel(parent)
+        win.title("Pack info")
+        win.configure(bg=BG)
+        win.geometry("480x340")
+        win.transient(parent)
+
+        tk.Label(win, text="PACK INFO", bg=BG, fg=ACCENT,
+                 font=('Helvetica', 12, 'bold')).pack(anchor='w', padx=14, pady=(12, 2))
+        tk.Label(win,
+                 text="Optional — describes the pack when you export or share it.",
+                 bg=BG, fg=FG2, font=('Helvetica', 9, 'italic'),
+                 wraplength=440, justify='left').pack(anchor='w', padx=14, pady=(0, 10))
+
+        entries = {}
+        for key, label, multiline in [
+            ("name",        "Pack name",   False),
+            ("author",      "Author / handle", False),
+            ("version",     "Version",     False),
+            ("description", "Description", True),
+        ]:
+            row = tk.Frame(win, bg=BG)
+            row.pack(fill='x', padx=14, pady=4)
+            tk.Label(row, text=label, bg=BG, fg=FG2, width=16,
+                     anchor='w', font=('Helvetica', 9)).pack(side='left')
+            if multiline:
+                txt = tk.Text(row, bg=BG2, fg=FG, height=4, width=30,
+                              relief='flat', insertbackground=FG,
+                              highlightthickness=0, font=('Helvetica', 10))
+                txt.insert('1.0', self._te_meta.get(key, ""))
+                txt.pack(side='left', fill='x', expand=True)
+                entries[key] = ('text', txt)
+            else:
+                ent = tk.Entry(row, bg=BG2, fg=FG, relief='flat',
+                                insertbackground=FG, highlightthickness=0,
+                                font=('Helvetica', 10))
+                ent.insert(0, self._te_meta.get(key, ""))
+                ent.pack(side='left', fill='x', expand=True, ipady=4)
+                entries[key] = ('entry', ent)
+
+        def commit():
+            new_meta = {}
+            for key, (kind, w) in entries.items():
+                v = w.get('1.0', 'end').strip() if kind == 'text' else w.get().strip()
+                if v:
+                    limit = MAX_DESC_LEN if key == 'description' else MAX_NAME_LEN
+                    new_meta[key] = v[:limit]
+            self._te_meta = new_meta
+            win.destroy()
+
+        bottom = tk.Frame(win, bg=BG)
+        bottom.pack(fill='x', padx=14, pady=(10, 12))
+        tk.Button(bottom, text="OK", bg=ACCENT, fg='white',
+                  activebackground='#4bbfae', activeforeground='white',
+                  relief='flat', bd=0, highlightthickness=0, padx=16, pady=6,
+                  font=('Helvetica', 10, 'bold'), cursor='hand2',
+                  command=commit).pack(side='right', padx=(8, 0))
+        tk.Button(bottom, text="Cancel", bg=BG3, fg=FG,
+                  relief='flat', bd=0, highlightthickness=0, padx=16, pady=6,
+                  font=('Helvetica', 10), cursor='hand2',
+                  command=win.destroy).pack(side='right')
 
     # ── WAV converter ──────────────────────────────────────────────────────────
 

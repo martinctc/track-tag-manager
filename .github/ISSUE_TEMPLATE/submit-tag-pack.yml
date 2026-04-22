@@ -1,0 +1,76 @@
+name: Submit a tag pack
+description: Share a tag vocabulary you've built so it can be added to the bundled presets.
+title: "[Tag pack] <pack name>"
+labels: ["tag-pack", "community"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing a tag pack! 🎉
+
+        The easiest way to share is to **export your vocabulary from inside the app**:
+        open **🏷️ Tags → 💾 Export pack…**, then either attach the resulting `.json`
+        file to this issue (drag and drop into the description), or paste its contents
+        into the JSON field below.
+
+        Bundled packs are accepted under the project's MIT licence.
+
+  - type: input
+    id: pack_name
+    attributes:
+      label: Pack name
+      description: Short, Title Case (e.g. "House & Techno", "Open-Format Wedding").
+      placeholder: e.g. Cratedigger Disco
+    validations:
+      required: true
+
+  - type: input
+    id: focus
+    attributes:
+      label: Genre / use focus
+      description: Who is this pack for? What kind of sets does it shine in?
+      placeholder: e.g. 70s/80s disco edits, late-night warm-ups
+    validations:
+      required: true
+
+  - type: input
+    id: author
+    attributes:
+      label: Your name or handle
+      description: Optional — credited in the pack's `_meta.author` field.
+      placeholder: e.g. @yourhandle
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Short description
+      description: One or two sentences. Will be shown in the in-app picker.
+    validations:
+      required: true
+
+  - type: textarea
+    id: pack_json
+    attributes:
+      label: Pack JSON (or attach the file in the issue body above)
+      description: |
+        Paste the contents of your exported `.json` file here, **or** drag-and-drop
+        the file into the issue description above and leave this field empty.
+      render: json
+      placeholder: |
+        {
+          "_meta": { "name": "...", "author": "...", "description": "..." },
+          "energy_levels": [...],
+          "comment_tags": { ... }
+        }
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: licence
+    attributes:
+      label: Licence
+      options:
+        - label: I'm happy for this pack to be included in the repository under the MIT licence.
+          required: true

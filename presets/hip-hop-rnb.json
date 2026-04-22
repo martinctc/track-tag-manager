@@ -1,0 +1,23 @@
+{
+  "_meta": {
+    "name": "Hip-Hop & R&B",
+    "author": "track-tag-manager defaults",
+    "description": "Era- and feel-led vocabulary for hip-hop and R&B sets, with vocal and regional tags.",
+    "version": "1.0"
+  },
+  "energy_levels": ["Smooth", "Warm-Up", "Hype", "Peak", "Cool-Down"],
+  "energy_colors": {
+    "Smooth":    "#2d8659",
+    "Warm-Up":   "#2471a3",
+    "Hype":      "#d68910",
+    "Peak":      "#c0392b",
+    "Cool-Down": "#7d3c98"
+  },
+  "comment_tags": {
+    "Style":  ["East-Coast", "West-Coast", "South", "Trap", "Drill", "Boom-Bap", "Conscious", "Pop-Rap", "Afrobeats", "Dancehall", "R&B", "Neo-Soul", "Funk"],
+    "Era":    ["80s", "90s", "00s", "10s", "20s"],
+    "Mood":   ["Hype", "Smooth", "Sexy", "Dark", "Aggressive", "Romantic", "Reflective", "Fun"],
+    "Vocals": ["Rap", "Sung", "Hook-Heavy", "No-Vocals", "Female-Lead", "Male-Lead", "Duet"],
+    "Crowd":  ["Singalong", "Dancefloor", "Cookout", "Throwback", "Late-Night"]
+  }
+}

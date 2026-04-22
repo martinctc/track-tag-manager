@@ -39,7 +39,7 @@ After tagging, right-click any track in Rekordbox → **Reload Tags** and everyt
 - Tags written to file instantly on save, no library lock-in
 - Untagged tracks marked with `●` in the file list for easy identification
 - **Stats dashboard** (`📊 Stats`) — see how many tracks are tagged, energy/rating distribution, and top tags by frequency
-- **Tag editor** (`🏷️ Tags`) — add, rename, reorder, recolor, or delete energy levels and comment tags / categories from inside the app. Changes persist to `tags.json` and apply to the live palette without restart. Tracks already tagged with a removed/renamed tag show those values in a per-track **LEGACY** section so you can clear them with one click.
+- **Tag editor** (`🏷️ Tags`) — add, rename, reorder, recolor, or delete energy levels and comment tags / categories from inside the app. **Load** a bundled preset or shared JSON pack, **export** your own pack to share. Changes persist to `tags.json` and apply to the live palette without restart. Tracks already tagged with a removed/renamed tag show those values in a per-track **LEGACY** section so you can clear them with one click.
 - **WAV converter** (`🔄 Convert WAVs`) — batch convert WAV files to FLAC (recommended), AIFF, or MP3 with full tag preservation
 
 ---
@@ -88,6 +88,21 @@ The live vocabulary is stored in `tags.json` (created on first launch from the d
 | Crowd | How it lands |
 | Vocals | Vocals / No-Vocals / Rap |
 | Instruments | Distinctive instruments worth searching by |
+
+---
+
+## Tag packs (sharing vocabularies)
+
+Tag vocabularies are portable. Inside the app, **🏷️ Tags → 📥 Load pack…** lets you load:
+
+- **Bundled presets** in [`presets/`](presets/) — minimal, open-format/wedding, house & techno, hip-hop / R&B, multilingual / global.
+- **Any JSON pack** a friend has sent you (`Browse for file…`).
+
+Loading offers **Replace** (swap your vocabulary for the pack) or **Merge** (add the pack's tags on top of yours, preserving your customisations).
+
+To share your own setup, click **💾 Export pack…** to save your current vocabulary as a JSON file. Send it to friends, or [submit it as a community pack](.github/ISSUE_TEMPLATE/submit-tag-pack.yml) for inclusion in `presets/`.
+
+See [`presets/README.md`](presets/README.md) for the file format, conventions, and merge rules.
 
 ---
 
@@ -141,6 +156,10 @@ PRs and issues welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup and 
 Open an issue with your OS, Python version, and steps to reproduce.
 
 **If you find a bug that corrupts or destroys audio files**, please email the maintainer (see GitHub profile) before opening a public issue, so a fix can ship before others trip over it.
+
+## Sharing a tag pack
+
+Built a vocabulary you'd like to share? Use the [Submit a tag pack](.github/ISSUE_TEMPLATE/submit-tag-pack.yml) issue template — no Git knowledge required. See [`presets/README.md`](presets/README.md) for details.
 
 ## License
 

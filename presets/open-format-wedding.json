@@ -1,0 +1,24 @@
+{
+  "_meta": {
+    "name": "Open-Format / Wedding",
+    "author": "track-tag-manager defaults",
+    "description": "Broad style coverage with crowd- and mood-led tags. Built for open-format DJs and weddings where you read the room more than the genre.",
+    "version": "1.0"
+  },
+  "energy_levels": ["Cocktail", "Warm-Up", "Build", "Peak", "Wind-Down"],
+  "energy_colors": {
+    "Cocktail":  "#2d8659",
+    "Warm-Up":   "#2471a3",
+    "Build":     "#d68910",
+    "Peak":      "#c0392b",
+    "Wind-Down": "#7d3c98"
+  },
+  "comment_tags": {
+    "Style": ["House", "Disco", "Funk", "Pop", "Hip-Hop", "R&B", "Latin", "Afro", "Soul", "Rock", "Jazz", "Country"],
+    "Era":   ["60s", "70s", "80s", "90s", "00s", "10s", "20s"],
+    "Mood":  ["Happy", "Chill", "Sexy", "Romantic", "Fun", "Uplifting", "Nostalgic", "Emotional"],
+    "Crowd": ["Singalong", "Dancefloor", "Crowd-Pleaser", "First-Dance", "Family-Friendly", "Late-Night"],
+    "Vocals": ["Vocals", "No-Vocals", "Rap"],
+    "Tempo": ["Slow", "Mid", "Fast"]
+  }
+}

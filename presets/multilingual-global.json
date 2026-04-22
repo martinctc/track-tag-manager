@@ -1,0 +1,23 @@
+{
+  "_meta": {
+    "name": "Multilingual / Global",
+    "author": "track-tag-manager defaults",
+    "description": "For DJs working across regions and languages. Style and language tags spanning Latin, Afro, Arabic, Desi, East-Asian and more.",
+    "version": "1.0"
+  },
+  "energy_levels": ["Start", "Build", "Peak", "Sustain", "Release"],
+  "energy_colors": {
+    "Start":   "#2d8659",
+    "Build":   "#2471a3",
+    "Peak":    "#c0392b",
+    "Sustain": "#7d3c98",
+    "Release": "#d68910"
+  },
+  "comment_tags": {
+    "Region":   ["Latin", "Afro", "Arabic", "Desi", "East-Asian", "Caribbean", "Brazilian", "European", "Western"],
+    "Style":    ["Reggaeton", "Bachata", "Salsa", "Merengue", "Cumbia", "Afrobeats", "Amapiano", "Dancehall", "Bhangra", "Bollywood", "K-Pop", "C-Pop", "J-Pop", "Khaleeji", "Shaabi", "Funk-Carioca"],
+    "Language": ["English", "Spanish", "Portuguese", "French", "Arabic", "Hindi", "Punjabi", "Korean", "Mandarin", "Japanese", "Instrumental"],
+    "Mood":     ["Happy", "Romantic", "Hype", "Chill", "Sexy", "Spiritual"],
+    "Crowd":    ["Singalong", "Dancefloor", "Wedding", "Pre-Game", "Late-Night"]
+  }
+}
