@@ -6,6 +6,8 @@ Built for the [Little Data Lotta Love](https://www.reddit.com/r/DJs/comments/1br
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
+![Main view of DJ Tag Manager — track list, waveform, and tag palette](docs/screenshots/main-screen.png)
+
 ---
 
 ## Why

@@ -283,6 +283,42 @@ kbd {
 }
 .strip-item p { color: var(--fg-2); font-size: 14.5px; }
 
+/* ── Screenshots ─────────────────────────────────────────────────────── */
+.shot {
+  padding: clamp(48px, 7vw, 88px) 0;
+  background: linear-gradient(180deg, var(--bg) 0%, var(--bg-1) 100%);
+}
+.shot-figure {
+  margin: 0 auto;
+  max-width: 1100px;
+  text-align: center;
+}
+.shot-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  box-shadow: 0 30px 60px -20px rgba(0,0,0,.7),
+              0 0 0 1px rgba(255,255,255,.02) inset;
+}
+.shot-figure figcaption {
+  margin-top: 14px;
+  color: var(--fg-3);
+  font-size: 13px;
+  font-style: italic;
+}
+.shot-figure-inline {
+  margin: 32px auto 0;
+}
+.shot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
+  margin-bottom: 48px;
+}
+.shot-grid .shot-figure { margin: 0; max-width: none; }
+
 /* ── Sections ────────────────────────────────────────────────────────── */
 .section {
   padding: clamp(72px, 10vw, 120px) 0;
