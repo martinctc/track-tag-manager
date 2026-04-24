@@ -1536,14 +1536,26 @@ class App(QMainWindow):
     def _build(self):
         root = QWidget()
         self.setCentralWidget(root)
-        h = QHBoxLayout()
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(0)
+        root_lay = QVBoxLayout(root)
+        root_lay.setContentsMargins(0, 0, 0, 0)
+        root_lay.setSpacing(0)
+
+        # Horizontal splitter — user can drag the divider to resize the sidebar
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(5)
+        splitter.setStyleSheet(f"""
+            QSplitter::handle {{
+                background-color: {_C.BG_LIGHT};
+            }}
+            QSplitter::handle:hover {{
+                background-color: {_C.ACCENT};
+            }}
+        """)
 
         # Left sidebar
         sidebar = QFrame()
         sidebar.setStyleSheet(f"background-color: {_C.BG_MEDIUM};")
-        sidebar.setMaximumWidth(380)
+        sidebar.setMinimumWidth(180)
         sb_lay = QVBoxLayout()
         sb_lay.setContentsMargins(0, 0, 0, 0)
         sb_lay.setSpacing(0)
@@ -1584,11 +1596,12 @@ class App(QMainWindow):
         self._tracks.track_selected.connect(self._on_select)
         sb_lay.addWidget(self._tracks)
         sidebar.setLayout(sb_lay)
-        h.addWidget(sidebar)
+        splitter.addWidget(sidebar)
 
         # Right side
         right = QFrame()
         right.setStyleSheet(f"background-color: {_C.BG_DARK};")
+        right.setMinimumWidth(400)
         r_lay = QVBoxLayout()
         r_lay.setContentsMargins(0, 0, 0, 0)
         r_lay.setSpacing(0)
@@ -1602,8 +1615,14 @@ class App(QMainWindow):
         r_lay.addWidget(self._editor, 1)
 
         right.setLayout(r_lay)
-        h.addWidget(right, 1)
-        root.setLayout(h)
+        splitter.addWidget(right)
+
+        # Default split: sidebar ~300px, rest to editor
+        splitter.setSizes([300, 1000])
+        splitter.setStretchFactor(0, 0)  # sidebar doesn't auto-stretch
+        splitter.setStretchFactor(1, 1)  # editor takes all extra space
+
+        root_lay.addWidget(splitter)
 
         self._build_menu()
 
