@@ -10,7 +10,24 @@ Built for the [Little Data Lotta Love](https://www.reddit.com/r/DJs/comments/1br
 
 ---
 
-## Why
+## Versions
+
+There are two versions of this app:
+
+| | Stable (recommended) | Preview |
+|---|---|---|
+| **File** | `tag_manager.py` | `tag_manager_pyqt.py` |
+| **Branch** | `main` | `feat/pyqt6-migration` |
+| **UI toolkit** | Tkinter (built-in) | PyQt6 |
+| **Dependencies** | Minimal (`mutagen`, `pygame`) | Requires `PyQt6` (+ optional `python-vlc`) |
+| **Status** | Battle-tested, production use | Feature-complete preview, actively developed |
+
+**Use the stable version** if you just want to tag tracks without friction — it requires fewer dependencies and has been in daily use.
+
+**Try the preview version** if you want the modernised PyQt6 interface. It is feature-complete (Stats, Vocab Editor, WAV Converter, resizable sidebar, legacy tag detection) and has the same tag read/write layer as the stable version. See the `feat/pyqt6-migration` branch for the latest. Feedback and bug reports welcome.
+
+---
+
 
 DJ software like Rekordbox stores custom tags (My Tags, cue points, etc.) in its own database — not in the audio file. Switch computers, re-import a track, or share files with another DJ and those tags are gone.
 
@@ -67,7 +84,16 @@ sudo apt install ffmpeg
 
 ```bash
 pip install -r requirements.txt
-python tag_manager.py
+python tag_manager.py           # stable version (Tkinter)
+```
+
+**To run the preview version** (PyQt6 UI), switch to the `feat/pyqt6-migration` branch and install the extra dependency:
+
+```bash
+git checkout feat/pyqt6-migration
+pip install PyQt6
+# optional: install python-vlc for audio playback in the preview version
+python tag_manager_pyqt.py
 ```
 
 ---

@@ -804,16 +804,19 @@ class App(tk.Tk):
                                     font=('Helvetica', 10))
         self.status_lbl.pack(side='right')
 
-        body = tk.Frame(self, bg=BG)
+        body = tk.PanedWindow(
+            self, orient=tk.HORIZONTAL, bg=BG,
+            sashwidth=6, sashcursor='sb_h_double_arrow',
+            handlesize=0, sashrelief='flat',
+        )
         body.pack(fill='both', expand=True, padx=14, pady=10)
         self._build_list(body)
         self._build_editor(body)
         self._build_footer()
 
     def _build_list(self, parent):
-        frame = tk.Frame(parent, bg=BG2, width=290)
-        frame.pack(side='left', fill='y', padx=(0, 10))
-        frame.pack_propagate(False)
+        frame = tk.Frame(parent, bg=BG2)
+        parent.add(frame, minsize=180, width=290, stretch='never')
 
         tk.Label(frame, text="TRACKS", bg=BG2, fg=FG2,
                  font=('Helvetica', 9, 'bold')).pack(anchor='w', padx=10, pady=(8, 4))
@@ -837,7 +840,7 @@ class App(tk.Tk):
 
     def _build_editor(self, parent):
         outer = tk.Frame(parent, bg=BG)
-        outer.pack(side='left', fill='both', expand=True)
+        parent.add(outer, minsize=400, stretch='always')
 
         self.track_lbl = tk.Label(outer, text="", bg=BG, fg=FG,
                                    font=('Helvetica', 11, 'bold'),
