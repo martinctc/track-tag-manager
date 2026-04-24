@@ -9,22 +9,29 @@ Keys:  Space = play/pause   S = save   Ctrl+O = open folder
 """
 
 import sys
+import json
+import re
+import threading
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton, QScrollArea,
-    QFrame, QFileDialog, QMessageBox, QSlider,
+    QFrame, QFileDialog, QMessageBox, QSlider, QDialog, QDialogButtonBox,
+    QLineEdit, QTextEdit, QColorDialog, QButtonGroup, QRadioButton,
+    QCheckBox, QProgressBar, QSizePolicy, QSplitter, QInputDialog,
 )
-from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, QThread, pyqtSlot
+from PyQt6.QtGui import QFont, QColor
 
 # Re-use all tag I/O from the original app — no changes needed there.
 sys.path.insert(0, str(Path(__file__).parent))
 from tag_manager import (
     read_tags, write_tags,
-    COMMENT_TAGS, ENERGY_LEVELS, ENERGY_COLORS,
-    DEFAULT_DIR, SUPPORTED, RATINGS, RATING_LABELS,
+    COMMENT_TAGS, ENERGY_LEVELS, ENERGY_COLORS, DEFAULT_ENERGY_COLORS,
+    DEFAULT_DIR, SUPPORTED, RATINGS, RATING_LABELS, TAG_META,
+    save_tag_config, list_bundled_presets, read_pack_file, apply_pack,
+    normalize_tag_name, _has_ffmpeg, _copy_id3_tags, _copy_tags_to_flac,
 )
 
 # Optional audio: uses python-vlc when present, silent fallback otherwise.
@@ -338,10 +345,35 @@ class TagEditorPanel(QWidget):
         self._track_lbl.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         outer.addWidget(self._track_lbl)
 
-        # Scrollable section
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; }")
+        # Scrollable section — stored so it can be rebuilt when vocab changes
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setStyleSheet("QScrollArea { border: none; }")
+        self._build_scroll_content()
+        outer.addWidget(self._scroll, 1)
+
+        save_btn = QPushButton("💾  Save Tags")
+        save_btn.setMinimumHeight(40)
+        save_btn.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        save_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {_C.ACCENT}; color: #fff;
+                border-radius: 4px; font-weight: bold;
+            }}
+            QPushButton:hover  {{ background-color: {_C.ACCENT_HI}; }}
+            QPushButton:pressed {{ background-color: {_C.ACCENT_LO}; }}
+        """)
+        save_btn.clicked.connect(self._save)
+        outer.addWidget(save_btn)
+
+        self.setLayout(outer)
+
+    def _build_scroll_content(self):
+        """Build or rebuild the scrollable tag-picker widget."""
+        self._energy_btns = {}
+        self._rating_btns = {}
+        self._tag_btns = {}
+
         inner_w = QWidget()
         inner = QVBoxLayout()
         inner.setSpacing(10)
@@ -399,24 +431,13 @@ class TagEditorPanel(QWidget):
 
         inner.addStretch()
         inner_w.setLayout(inner)
-        scroll.setWidget(inner_w)
-        outer.addWidget(scroll, 1)
+        self._scroll.setWidget(inner_w)
 
-        save_btn = QPushButton("💾  Save Tags")
-        save_btn.setMinimumHeight(40)
-        save_btn.setFont(QFont("Arial", 11, QFont.Weight.Bold))
-        save_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {_C.ACCENT}; color: #fff;
-                border-radius: 4px; font-weight: bold;
-            }}
-            QPushButton:hover  {{ background-color: {_C.ACCENT_HI}; }}
-            QPushButton:pressed {{ background-color: {_C.ACCENT_LO}; }}
-        """)
-        save_btn.clicked.connect(self._save)
-        outer.addWidget(save_btn)
-
-        self.setLayout(outer)
+    def rebuild_vocab(self):
+        """Rebuild tag palette after the vocabulary has been updated."""
+        self._build_scroll_content()
+        if self._path:
+            self._refresh_buttons()
 
     @staticmethod
     def _section_label(text: str) -> QLabel:
@@ -498,6 +519,997 @@ class TagEditorPanel(QWidget):
             self.saved.emit(self._path)
 
 
+# ─── Statistics Dialog ───────────────────────────────────────────────────────
+
+class StatsDialog(QDialog):
+    """Read-only statistics about all tracks in the current folder."""
+
+    def __init__(self, files: list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Statistics")
+        self.resize(620, 560)
+        self.setStyleSheet(_stylesheet())
+        self._files = files
+        self._init_ui()
+        QTimer.singleShot(60, self._scan)
+
+    def _init_ui(self):
+        lay = QVBoxLayout(self)
+        lay.setSpacing(10)
+
+        title = QLabel("📊  Statistics")
+        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        lay.addWidget(title)
+
+        self._status_lbl = QLabel(f"Scanning {len(self._files)} tracks…")
+        self._status_lbl.setStyleSheet(f"color: {_C.FG2};")
+        lay.addWidget(self._status_lbl)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        self._body = QWidget()
+        self._body_lay = QVBoxLayout(self._body)
+        self._body_lay.setSpacing(12)
+        scroll.setWidget(self._body)
+        lay.addWidget(scroll, 1)
+
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        lay.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
+
+    def _scan(self):
+        tagged = untagged = errors = 0
+        energy_counts: dict = {}
+        rating_counts: dict = {}
+        tag_counts: dict = {}
+
+        for path in self._files:
+            try:
+                t = read_tags(path)
+                energy   = t.get('energy')
+                rating   = t.get('rating')
+                comments = t.get('comments', set())
+                if energy or rating or comments:
+                    tagged += 1
+                else:
+                    untagged += 1
+                if energy:
+                    energy_counts[energy] = energy_counts.get(energy, 0) + 1
+                if rating:
+                    rating_counts[rating] = rating_counts.get(rating, 0) + 1
+                for tag in comments:
+                    tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            except Exception:
+                errors += 1
+
+        total = len(self._files)
+        self._status_lbl.setText(f"Scanned {total} tracks")
+        self._show_results(total, tagged, untagged, errors,
+                           energy_counts, rating_counts, tag_counts)
+
+    def _show_results(self, total, tagged, untagged, errors,
+                      energy_counts, rating_counts, tag_counts):
+        lay = self._body_lay
+
+        # Summary cards
+        self._section("SUMMARY", lay)
+        grid = QHBoxLayout()
+        for label, value, color in [
+            ("Total",    total,    _C.FG),
+            ("Tagged",   tagged,   "#2ecc71"),
+            ("Untagged", untagged, "#e74c3c"),
+            ("Errors",   errors,   "#f39c12"),
+        ]:
+            card = QFrame()
+            card.setStyleSheet(
+                f"background-color: {_C.BG_MEDIUM}; border-radius: 6px;")
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(12, 8, 12, 8)
+            v = QLabel(str(value))
+            v.setFont(QFont("Arial", 20, QFont.Weight.Bold))
+            v.setStyleSheet(f"color: {color};")
+            v.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cl.addWidget(v)
+            l = QLabel(label)
+            l.setFont(QFont("Arial", 9))
+            l.setStyleSheet(f"color: {_C.FG2};")
+            l.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cl.addWidget(l)
+            grid.addWidget(card)
+        lay.addLayout(grid)
+
+        # Energy distribution
+        if energy_counts:
+            self._section("ENERGY DISTRIBUTION", lay)
+            max_e = max(energy_counts.values(), default=1)
+            for lvl in ENERGY_LEVELS:
+                count = energy_counts.get(lvl, 0)
+                color = ENERGY_COLORS.get(lvl, _C.ACCENT)
+                self._bar_row(lay, lvl, count, total, max_e, color)
+            for lvl, count in sorted(energy_counts.items()):
+                if lvl not in ENERGY_LEVELS:
+                    self._bar_row(lay, f"{lvl} (legacy)", count, total, max_e, _C.FG2)
+
+        # Rating distribution
+        if rating_counts:
+            self._section("RATING DISTRIBUTION", lay)
+            max_r = max(rating_counts.values(), default=1)
+            for r in sorted(RATINGS, reverse=True):
+                count = rating_counts.get(r, 0)
+                self._bar_row(lay, RATING_LABELS[r], count, total, max_r, _C.ACCENT)
+
+        # Top comment tags
+        if tag_counts:
+            self._section("TOP COMMENT TAGS", lay)
+            top = sorted(tag_counts.items(), key=lambda x: -x[1])[:20]
+            max_t = top[0][1] if top else 1
+            for tag, count in top:
+                self._bar_row(lay, tag, count, total, max_t, "#3498db")
+
+        lay.addStretch()
+
+    @staticmethod
+    def _section(title: str, lay: QVBoxLayout):
+        lbl = QLabel(title)
+        lbl.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        lbl.setStyleSheet(f"color: {_C.FG2}; margin-top: 6px;")
+        lay.addWidget(lbl)
+
+    @staticmethod
+    def _bar_row(lay: QVBoxLayout, label: str, count: int, total: int,
+                 max_val: int, color: str):
+        row = QHBoxLayout()
+        lbl = QLabel(label)
+        lbl.setFixedWidth(140)
+        lbl.setFont(QFont("Arial", 9))
+        row.addWidget(lbl)
+        bar = QProgressBar()
+        bar.setRange(0, max(max_val, 1))
+        bar.setValue(count)
+        pct = f"{count / total * 100:.0f}%" if total else "0%"
+        bar.setFormat(f" {count}  ({pct})")
+        bar.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        bar.setMinimumHeight(22)
+        bar.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: {_C.BG_MEDIUM}; border-radius: 3px;
+                color: {_C.FG}; font-size: 9px;
+            }}
+            QProgressBar::chunk {{ background-color: {color}; border-radius: 3px; }}
+        """)
+        row.addWidget(bar, 1)
+        lay.addLayout(row)
+
+
+# ─── Vocabulary Editor Dialog ─────────────────────────────────────────────────
+
+class VocabEditorDialog(QDialog):
+    """Edit energy levels and comment tag categories. Cancel-safe."""
+
+    vocab_saved = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Tag Vocabulary Editor")
+        self.resize(720, 680)
+        self.setStyleSheet(_stylesheet())
+
+        # Deep-copy working state so Cancel truly discards
+        self._levels = list(ENERGY_LEVELS)
+        self._colors = dict(ENERGY_COLORS)
+        self._cats   = list(COMMENT_TAGS.keys())
+        self._tags   = {k: list(v) for k, v in COMMENT_TAGS.items()}
+        self._meta   = dict(TAG_META)
+
+        self._init_ui()
+        self._render()
+
+    def _init_ui(self):
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+
+        title = QLabel("🏷️  Tag Vocabulary Editor")
+        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        lay.addWidget(title)
+
+        note = QLabel("Changes are not applied until you click Save & Apply.")
+        note.setFont(QFont("Arial", 9))
+        note.setStyleSheet(f"color: {_C.FG2};")
+        lay.addWidget(note)
+
+        tb = QHBoxLayout()
+        for text, slot in [
+            ("📂 Load Pack…",    self._load_pack),
+            ("💾 Export Pack…",  self._export_pack),
+            ("ℹ️ Pack Info…",     self._edit_meta),
+        ]:
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            tb.addWidget(b)
+        tb.addStretch()
+        lay.addLayout(tb)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        self._body = QWidget()
+        self._body_lay = QVBoxLayout(self._body)
+        self._body_lay.setSpacing(10)
+        scroll.setWidget(self._body)
+        lay.addWidget(scroll, 1)
+
+        bottom = QHBoxLayout()
+        bottom.addStretch()
+        save_btn = QPushButton("✅  Save & Apply")
+        save_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {_C.ACCENT}; color: #fff;
+                border-radius: 4px; padding: 8px 20px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: {_C.ACCENT_HI}; }}
+        """)
+        save_btn.clicked.connect(self._save)
+        bottom.addWidget(save_btn)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        bottom.addWidget(cancel_btn)
+        lay.addLayout(bottom)
+
+    def _render(self):
+        """Rebuild the scrollable body from working state."""
+        while self._body_lay.count():
+            item = self._body_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Energy levels
+        hdr = QHBoxLayout()
+        sec = QLabel("ENERGY LEVELS")
+        sec.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        sec.setStyleSheet(f"color: {_C.ACCENT};")
+        hdr.addWidget(sec)
+        hdr.addStretch()
+        add_b = QPushButton("+ Add Level")
+        add_b.clicked.connect(self._add_level)
+        hdr.addWidget(add_b)
+        hdr_w = QWidget()
+        hdr_w.setLayout(hdr)
+        self._body_lay.addWidget(hdr_w)
+
+        for i, lvl in enumerate(self._levels):
+            self._body_lay.addWidget(self._level_row(i, lvl))
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {_C.BG_LIGHT};")
+        self._body_lay.addWidget(sep)
+
+        # Comment categories
+        hdr2 = QHBoxLayout()
+        sec2 = QLabel("COMMENT CATEGORIES & TAGS")
+        sec2.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        sec2.setStyleSheet(f"color: {_C.ACCENT};")
+        hdr2.addWidget(sec2)
+        hdr2.addStretch()
+        add_cat = QPushButton("+ Add Category")
+        add_cat.clicked.connect(self._add_category)
+        hdr2.addWidget(add_cat)
+        hdr2_w = QWidget()
+        hdr2_w.setLayout(hdr2)
+        self._body_lay.addWidget(hdr2_w)
+
+        for ci, cat in enumerate(self._cats):
+            self._body_lay.addWidget(self._category_block(ci, cat))
+
+        self._body_lay.addStretch()
+
+    # ── Row builders ──────────────────────────────────────────────────────────
+
+    def _level_row(self, i: int, lvl: str) -> QWidget:
+        row = QFrame()
+        row.setStyleSheet(
+            f"background-color: {_C.BG_MEDIUM}; border-radius: 4px;")
+        h = QHBoxLayout(row)
+        h.setContentsMargins(8, 6, 8, 6)
+
+        swatch = QPushButton()
+        swatch.setFixedSize(24, 24)
+        col = self._colors.get(lvl, "#888888")
+        swatch.setStyleSheet(
+            f"background-color: {col}; border-radius: 3px; padding: 0;")
+        swatch.setToolTip("Change colour")
+        swatch.clicked.connect(lambda _, l=lvl: self._pick_color(l))
+        h.addWidget(swatch)
+
+        h.addWidget(QLabel(lvl), 1)
+
+        for text, slot in [
+            ("▲", lambda _, idx=i: self._move_level(idx, -1)),
+            ("▼", lambda _, idx=i: self._move_level(idx, +1)),
+        ]:
+            b = QPushButton(text)
+            b.setFixedSize(28, 28)
+            b.clicked.connect(slot)
+            h.addWidget(b)
+
+        ren = QPushButton("Rename")
+        ren.clicked.connect(lambda _, idx=i: self._rename_level(idx))
+        h.addWidget(ren)
+
+        del_b = QPushButton("✕")
+        del_b.setFixedSize(28, 28)
+        del_b.setStyleSheet("QPushButton { color: #e74c3c; }")
+        del_b.clicked.connect(lambda _, idx=i: self._delete_level(idx))
+        h.addWidget(del_b)
+        return row
+
+    def _category_block(self, ci: int, cat: str) -> QWidget:
+        block = QFrame()
+        block.setStyleSheet(
+            f"background-color: {_C.BG_DARK}; border-radius: 4px;")
+        v = QVBoxLayout(block)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(6)
+
+        hdr = QHBoxLayout()
+        for text, slot in [
+            ("▲", lambda _, idx=ci: self._move_category(idx, -1)),
+            ("▼", lambda _, idx=ci: self._move_category(idx, +1)),
+        ]:
+            b = QPushButton(text)
+            b.setFixedSize(26, 26)
+            b.clicked.connect(slot)
+            hdr.addWidget(b)
+        clbl = QLabel(cat)
+        clbl.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        clbl.setStyleSheet(f"color: {_C.ACCENT};")
+        hdr.addWidget(clbl)
+        hdr.addStretch()
+        ren = QPushButton("Rename")
+        ren.clicked.connect(lambda _, idx=ci: self._rename_category(idx))
+        hdr.addWidget(ren)
+        del_b = QPushButton("✕ Delete")
+        del_b.setStyleSheet("QPushButton { color: #e74c3c; }")
+        del_b.clicked.connect(lambda _, idx=ci: self._delete_category(idx))
+        hdr.addWidget(del_b)
+        v.addLayout(hdr)
+
+        inner = QFrame()
+        inner.setStyleSheet(
+            f"background-color: {_C.BG_MEDIUM}; border-radius: 3px;")
+        iv = QVBoxLayout(inner)
+        iv.setContentsMargins(8, 6, 8, 6)
+        iv.setSpacing(2)
+
+        tags = self._tags.get(cat, [])
+        if not tags:
+            no_t = QLabel("(no tags yet)")
+            no_t.setStyleSheet(f"color: {_C.FG2}; font-style: italic;")
+            iv.addWidget(no_t)
+        for ti, tag in enumerate(tags):
+            iv.addWidget(self._tag_row(cat, ti, tag))
+
+        add_tag = QPushButton("+ Add tag")
+        add_tag.clicked.connect(lambda _, c=cat: self._add_tag(c))
+        iv.addWidget(add_tag)
+        v.addWidget(inner)
+        return block
+
+    def _tag_row(self, cat: str, ti: int, tag: str) -> QWidget:
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+        for text, slot in [
+            ("▲", lambda _, c=cat, idx=ti: self._move_tag(c, idx, -1)),
+            ("▼", lambda _, c=cat, idx=ti: self._move_tag(c, idx, +1)),
+        ]:
+            b = QPushButton(text)
+            b.setFixedSize(24, 24)
+            b.clicked.connect(slot)
+            h.addWidget(b)
+        h.addWidget(QLabel(tag), 1)
+        ren = QPushButton("Rename")
+        ren.setFixedHeight(24)
+        ren.clicked.connect(lambda _, c=cat, idx=ti: self._rename_tag(c, idx))
+        h.addWidget(ren)
+        del_b = QPushButton("✕")
+        del_b.setFixedSize(24, 24)
+        del_b.setStyleSheet("QPushButton { color: #e74c3c; }")
+        del_b.clicked.connect(lambda _, c=cat, idx=ti: self._delete_tag(c, idx))
+        h.addWidget(del_b)
+        return row
+
+    # ── Energy level mutations ────────────────────────────────────────────────
+
+    def _move_level(self, i: int, delta: int):
+        j = i + delta
+        if 0 <= j < len(self._levels):
+            self._levels[i], self._levels[j] = self._levels[j], self._levels[i]
+            self._render()
+
+    def _pick_color(self, lvl: str):
+        cur = self._colors.get(lvl, "#888888")
+        col = QColorDialog.getColor(QColor(cur), self, f"Colour for {lvl}")
+        if col.isValid():
+            self._colors[lvl] = col.name()
+            self._render()
+
+    def _rename_level(self, i: int):
+        old = self._levels[i]
+        new, ok = QInputDialog.getText(self, "Rename energy level",
+                                        f"Rename '{old}' to:", text=old)
+        if not ok:
+            return
+        new = normalize_tag_name(new)
+        if not new or new == old:
+            return
+        if new in self._levels:
+            QMessageBox.warning(self, "Duplicate",
+                                 f"Energy level '{new}' already exists.")
+            return
+        self._levels[i] = new
+        if old in self._colors:
+            self._colors[new] = self._colors.pop(old)
+        self._render()
+
+    def _delete_level(self, i: int):
+        lvl = self._levels[i]
+        if QMessageBox.question(
+                self, "Delete energy level",
+                f"Delete '{lvl}'?\n\nExisting tracks tagged with this level will "
+                "show it as a legacy entry until cleared.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        del self._levels[i]
+        self._colors.pop(lvl, None)
+        self._render()
+
+    def _add_level(self):
+        new, ok = QInputDialog.getText(self, "Add energy level", "Level name:")
+        if not ok:
+            return
+        new = normalize_tag_name(new)
+        if not new:
+            return
+        if new in self._levels:
+            QMessageBox.warning(self, "Duplicate",
+                                 f"Energy level '{new}' already exists.")
+            return
+        self._levels.append(new)
+        self._colors[new] = DEFAULT_ENERGY_COLORS.get(new, _C.ACCENT)
+        self._render()
+
+    # ── Category mutations ────────────────────────────────────────────────────
+
+    def _move_category(self, ci: int, delta: int):
+        j = ci + delta
+        if 0 <= j < len(self._cats):
+            self._cats[ci], self._cats[j] = self._cats[j], self._cats[ci]
+            self._render()
+
+    def _rename_category(self, ci: int):
+        old = self._cats[ci]
+        new, ok = QInputDialog.getText(self, "Rename category",
+                                        f"Rename '{old}' to:", text=old)
+        if not ok:
+            return
+        new = new.strip()
+        if not new or new == old:
+            return
+        if new in self._cats:
+            QMessageBox.warning(self, "Duplicate",
+                                 f"Category '{new}' already exists.")
+            return
+        self._cats[ci] = new
+        self._tags[new] = self._tags.pop(old, [])
+        self._render()
+
+    def _delete_category(self, ci: int):
+        cat = self._cats[ci]
+        n = len(self._tags.get(cat, []))
+        if QMessageBox.question(
+                self, "Delete category",
+                f"Delete category '{cat}' and its {n} tag(s)?\n\n"
+                "Existing tracks tagged with these will show them as legacy entries.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        del self._cats[ci]
+        self._tags.pop(cat, None)
+        self._render()
+
+    def _add_category(self):
+        new, ok = QInputDialog.getText(self, "Add category", "Category name:")
+        if not ok:
+            return
+        new = new.strip()
+        if not new:
+            return
+        if new in self._cats:
+            QMessageBox.warning(self, "Duplicate",
+                                 f"Category '{new}' already exists.")
+            return
+        self._cats.append(new)
+        self._tags[new] = []
+        self._render()
+
+    # ── Tag mutations ─────────────────────────────────────────────────────────
+
+    def _move_tag(self, cat: str, ti: int, delta: int):
+        tags = self._tags.get(cat, [])
+        j = ti + delta
+        if 0 <= j < len(tags):
+            tags[ti], tags[j] = tags[j], tags[ti]
+            self._render()
+
+    def _rename_tag(self, cat: str, ti: int):
+        tags = self._tags.get(cat, [])
+        old = tags[ti]
+        new, ok = QInputDialog.getText(self, "Rename tag",
+                                        f"Rename '{old}' to:", text=old)
+        if not ok:
+            return
+        new = normalize_tag_name(new)
+        if not new or new == old:
+            return
+        if new in tags:
+            QMessageBox.warning(self, "Duplicate",
+                                 f"Tag '{new}' already exists in '{cat}'.")
+            return
+        tags[ti] = new
+        self._render()
+
+    def _delete_tag(self, cat: str, ti: int):
+        tags = self._tags.get(cat, [])
+        tag = tags[ti]
+        if QMessageBox.question(
+                self, "Delete tag",
+                f"Delete '{tag}' from '{cat}'?\n\n"
+                "Existing tracks with this tag will show it as a legacy entry.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        del tags[ti]
+        self._render()
+
+    def _add_tag(self, cat: str):
+        new, ok = QInputDialog.getText(self, "Add tag",
+                                        f"New tag in '{cat}':")
+        if not ok:
+            return
+        new = normalize_tag_name(new)
+        if not new:
+            return
+        tags = self._tags.setdefault(cat, [])
+        if new in tags:
+            QMessageBox.warning(self, "Duplicate",
+                                 f"Tag '{new}' already exists in '{cat}'.")
+            return
+        for other_cat, other_tags in self._tags.items():
+            if other_cat != cat and new in other_tags:
+                if QMessageBox.question(
+                        self, "Duplicate across categories",
+                        f"'{new}' already exists in '{other_cat}'. Tags share a "
+                        "flat namespace in the file — adding it here as well may "
+                        "cause confusion. Add anyway?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                ) != QMessageBox.StandardButton.Yes:
+                    return
+                break
+        tags.append(new)
+        self._render()
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+
+    def _save(self):
+        if not self._levels:
+            QMessageBox.warning(self, "Validation",
+                                 "At least one energy level is required.")
+            return
+        ENERGY_LEVELS[:] = list(self._levels)
+        ENERGY_COLORS.clear()
+        for lv in ENERGY_LEVELS:
+            ENERGY_COLORS[lv] = self._colors.get(
+                lv, DEFAULT_ENERGY_COLORS.get(lv, _C.ACCENT))
+        COMMENT_TAGS.clear()
+        for cat in self._cats:
+            COMMENT_TAGS[cat] = list(self._tags.get(cat, []))
+        TAG_META.clear()
+        TAG_META.update(self._meta)
+        save_tag_config()
+        self.vocab_saved.emit()
+        self.accept()
+
+    # ── Pack load / export ────────────────────────────────────────────────────
+
+    def _current_state(self) -> dict:
+        return {
+            "energy_levels": list(self._levels),
+            "energy_colors": dict(self._colors),
+            "comment_tags":  {k: list(v) for k, v in self._tags.items()},
+            "_meta":         dict(self._meta),
+        }
+
+    def _apply_state(self, state: dict):
+        self._levels = list(state["energy_levels"])
+        self._colors = dict(state["energy_colors"])
+        self._cats   = list(state["comment_tags"].keys())
+        self._tags   = {k: list(v) for k, v in state["comment_tags"].items()}
+        self._meta   = dict(state.get("_meta", {}))
+        self._render()
+
+    def _load_pack(self):
+        presets = list_bundled_presets()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Load tag pack")
+        dlg.resize(500, 420)
+        dlg.setStyleSheet(_stylesheet())
+        lay = QVBoxLayout(dlg)
+
+        ttl = QLabel("LOAD A TAG PACK")
+        ttl.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        lay.addWidget(ttl)
+        note = QLabel("Pick a bundled preset or browse to a JSON file.")
+        note.setStyleSheet(f"color: {_C.FG2}; font-style: italic;")
+        lay.addWidget(note)
+
+        if presets:
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setStyleSheet("QScrollArea { border: none; }")
+            body = QWidget()
+            bl = QVBoxLayout(body)
+            bl.setSpacing(6)
+            for path, meta in presets:
+                name = meta.get("name") or path.stem
+                desc = meta.get("description") or ""
+                if len(desc) > 140:
+                    desc = desc[:137] + "…"
+                card = QFrame()
+                card.setStyleSheet(
+                    f"background-color: {_C.BG_MEDIUM}; border-radius: 4px;")
+                cl = QVBoxLayout(card)
+                cl.setContentsMargins(10, 8, 10, 8)
+                n_lbl = QLabel(name)
+                n_lbl.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+                cl.addWidget(n_lbl)
+                if desc:
+                    d = QLabel(desc)
+                    d.setStyleSheet(f"color: {_C.FG2}; font-size: 9px;")
+                    d.setWordWrap(True)
+                    cl.addWidget(d)
+                btns = QHBoxLayout()
+                for mode_text, mode in [("Replace…", "replace"), ("Merge", "merge")]:
+                    b = QPushButton(mode_text)
+                    b.clicked.connect(
+                        lambda _, p=path, m=mode, d=dlg:
+                        self._load_pack_from_file(p, m, d))
+                    btns.addWidget(b)
+                btns.addStretch()
+                cl.addLayout(btns)
+                bl.addWidget(card)
+            bl.addStretch()
+            scroll.setWidget(body)
+            lay.addWidget(scroll, 1)
+        else:
+            no_p = QLabel("(No bundled presets found in presets/.)")
+            no_p.setStyleSheet(f"color: {_C.FG2}; font-style: italic;")
+            lay.addWidget(no_p)
+            lay.addStretch()
+
+        bottom = QHBoxLayout()
+        browse = QPushButton("📂 Browse for file…")
+        browse.clicked.connect(lambda: self._browse_pack(dlg))
+        bottom.addWidget(browse)
+        bottom.addStretch()
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(dlg.reject)
+        bottom.addWidget(cancel)
+        lay.addLayout(bottom)
+        dlg.exec()
+
+    def _browse_pack(self, picker: QDialog):
+        path, _ = QFileDialog.getOpenFileName(
+            picker, "Select a tag pack JSON file",
+            filter="Tag pack JSON (*.json);;All files (*.*)")
+        if not path:
+            return
+        ans = QMessageBox.question(
+            picker, "Apply pack",
+            "Yes = Replace your current vocabulary\n"
+            "No  = Merge into your current vocabulary",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No |
+            QMessageBox.StandardButton.Cancel)
+        if ans == QMessageBox.StandardButton.Cancel:
+            return
+        mode = "replace" if ans == QMessageBox.StandardButton.Yes else "merge"
+        self._load_pack_from_file(Path(path), mode, picker)
+
+    def _load_pack_from_file(self, path: Path, mode: str, picker: QDialog):
+        clean, errors, warnings = read_pack_file(path)
+        if errors:
+            QMessageBox.critical(picker, "Could not load pack", "\n".join(errors))
+            return
+        if not (clean["energy_levels"] or clean["comment_tags"]):
+            QMessageBox.critical(picker, "Could not load pack",
+                                  "The file contained no energy levels or tags.")
+            return
+        new_state, summary, apply_warnings = apply_pack(
+            self._current_state(), clean, mode)
+        meta_name = clean.get("_meta", {}).get("name") or path.stem
+        bits = []
+        if mode == "replace":
+            bits.append(
+                f"Replace with '{meta_name}': "
+                f"{len(new_state['energy_levels'])} levels, "
+                f"{sum(len(v) for v in new_state['comment_tags'].values())} tags "
+                f"across {len(new_state['comment_tags'])} categories.")
+        else:
+            bits.append(
+                f"Merge '{meta_name}': adding {summary['levels_added']} energy "
+                f"level(s), {summary['categories_added']} new categor(y/ies), "
+                f"{summary['tags_added']} new tag(s).")
+        for w in warnings + apply_warnings:
+            bits.append(f"⚠ {w}")
+        bits.append("\nApply now? (Save & Apply still required to persist.)")
+        if QMessageBox.question(
+                picker, "Confirm pack", "\n".join(bits),
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        ) != QMessageBox.StandardButton.Ok:
+            return
+        self._apply_state(new_state)
+        picker.accept()
+
+    def _export_pack(self):
+        if not self._levels and not self._tags:
+            QMessageBox.information(self, "Nothing to export",
+                                     "Add some energy levels or tags first.")
+            return
+        suggested = (self._meta.get("name") or "my-tag-pack")
+        suggested = (re.sub(r'[^a-zA-Z0-9]+', '-', suggested)
+                     .strip('-').lower() or "tag-pack")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export tag pack", f"{suggested}.json",
+            "Tag pack JSON (*.json)")
+        if not path:
+            return
+        data: dict = {}
+        if self._meta:
+            data["_meta"] = dict(self._meta)
+        data["energy_levels"] = list(self._levels)
+        data["energy_colors"]  = {k: self._colors.get(k, "#888888")
+                                   for k in self._levels}
+        data["comment_tags"]   = {k: list(self._tags.get(k, []))
+                                   for k in self._cats}
+        try:
+            Path(path).write_text(json.dumps(data, indent=2), encoding='utf-8')
+        except OSError as e:
+            QMessageBox.critical(self, "Export failed", str(e))
+
+    def _edit_meta(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Pack Info")
+        dlg.resize(460, 320)
+        dlg.setStyleSheet(_stylesheet())
+        lay = QVBoxLayout(dlg)
+
+        ttl = QLabel("PACK INFO")
+        ttl.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        lay.addWidget(ttl)
+        note = QLabel("Optional — describes the pack when you export or share it.")
+        note.setStyleSheet(f"color: {_C.FG2}; font-style: italic;")
+        lay.addWidget(note)
+
+        entries: dict = {}
+        for key, label, multiline in [
+            ("name",        "Pack name",       False),
+            ("author",      "Author / handle", False),
+            ("version",     "Version",         False),
+            ("description", "Description",     True),
+        ]:
+            row = QHBoxLayout()
+            lbl = QLabel(label)
+            lbl.setFixedWidth(120)
+            lbl.setStyleSheet(f"color: {_C.FG2};")
+            row.addWidget(lbl)
+            if multiline:
+                w = QTextEdit()
+                w.setFixedHeight(72)
+                w.setPlainText(self._meta.get(key, ""))
+                w.setStyleSheet(
+                    f"background-color: {_C.BG_MEDIUM}; color: {_C.FG};")
+            else:
+                w = QLineEdit(self._meta.get(key, ""))
+                w.setStyleSheet(
+                    f"background-color: {_C.BG_MEDIUM}; color: {_C.FG};")
+            row.addWidget(w)
+            entries[key] = (multiline, w)
+            lay.addLayout(row)
+
+        def commit():
+            new_meta: dict = {}
+            for k, (ml, w) in entries.items():
+                v = w.toPlainText().strip() if ml else w.text().strip()
+                if v:
+                    new_meta[k] = v
+            self._meta = new_meta
+            dlg.accept()
+
+        bottom = QHBoxLayout()
+        ok_btn = QPushButton("OK")
+        ok_btn.setStyleSheet(
+            f"QPushButton {{ background-color: {_C.ACCENT}; color: #fff; }}")
+        ok_btn.clicked.connect(commit)
+        bottom.addStretch()
+        bottom.addWidget(ok_btn)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dlg.reject)
+        bottom.addWidget(cancel_btn)
+        lay.addLayout(bottom)
+        dlg.exec()
+
+
+# ─── WAV Converter Dialog ─────────────────────────────────────────────────────
+
+class WavConverterDialog(QDialog):
+    """Convert WAV files in the current folder to FLAC, AIFF, or MP3."""
+
+    files_changed = pyqtSignal()
+
+    def __init__(self, files: list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Convert WAV Files")
+        self.resize(480, 360)
+        self.setStyleSheet(_stylesheet())
+        self._wav_files = [f for f in files if f.suffix.lower() == '.wav']
+        self._init_ui()
+
+    def _init_ui(self):
+        lay = QVBoxLayout(self)
+        lay.setSpacing(10)
+
+        title = QLabel("🔄  Convert WAV Files")
+        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        lay.addWidget(title)
+
+        count_lbl = QLabel(
+            f"{len(self._wav_files)} WAV file(s) found in current folder.")
+        count_lbl.setStyleSheet(f"color: {_C.FG2};")
+        lay.addWidget(count_lbl)
+
+        fmt_hdr = QLabel("TARGET FORMAT")
+        fmt_hdr.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+        fmt_hdr.setStyleSheet(f"color: {_C.FG2};")
+        lay.addWidget(fmt_hdr)
+
+        self._fmt_group = QButtonGroup(self)
+        for fmt, label in [
+            ('flac', "FLAC — lossless, compact, full tag support (Recommended)"),
+            ('aiff', "AIFF — lossless, full tag support, large files"),
+            ('mp3',  "MP3 — 320 kbps, smallest files, lossy"),
+        ]:
+            rb = QRadioButton(label)
+            if fmt == 'flac':
+                rb.setChecked(True)
+            rb.setProperty("fmt", fmt)
+            self._fmt_group.addButton(rb)
+            lay.addWidget(rb)
+
+        self._del_check = QCheckBox(
+            "Delete original WAV files after conversion")
+        lay.addWidget(self._del_check)
+
+        self._progress_lbl = QLabel("")
+        self._progress_lbl.setStyleSheet(f"color: {_C.FG2};")
+        lay.addWidget(self._progress_lbl)
+
+        lay.addStretch()
+
+        buttons = QHBoxLayout()
+        self._convert_btn = QPushButton("Convert")
+        self._convert_btn.setMinimumHeight(38)
+        self._convert_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {_C.ACCENT}; color: #fff;
+                border-radius: 4px; padding: 8px 20px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: {_C.ACCENT_HI}; }}
+            QPushButton:disabled {{
+                background-color: {_C.BG_LIGHT}; color: {_C.FG2};
+            }}
+        """)
+        self._convert_btn.clicked.connect(self._do_convert)
+        if not self._wav_files:
+            self._convert_btn.setEnabled(False)
+        buttons.addWidget(self._convert_btn)
+        buttons.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        buttons.addWidget(close_btn)
+        lay.addLayout(buttons)
+
+    def _get_fmt(self) -> str:
+        for btn in self._fmt_group.buttons():
+            if btn.isChecked():
+                return btn.property("fmt")
+        return 'flac'
+
+    def _do_convert(self):
+        try:
+            from pydub import AudioSegment  # noqa: PLC0415
+        except ImportError:
+            QMessageBox.critical(
+                self, "Missing dependency",
+                "pydub is required for WAV conversion.\n"
+                "Install it with:  pip install pydub")
+            return
+
+        fmt = self._get_fmt()
+        delete = self._del_check.isChecked()
+        wav_files = list(self._wav_files)
+        self._convert_btn.setEnabled(False)
+        self._convert_btn.setText("Converting…")
+
+        def _worker():
+            from pydub import AudioSegment  # noqa: PLC0415 (thread needs own import)
+            ext_map = {'flac': '.flac', 'aiff': '.aiff', 'mp3': '.mp3'}
+            converted = skipped = failed = 0
+            total = len(wav_files)
+            for i, wav_path in enumerate(wav_files):
+                QTimer.singleShot(
+                    0, lambda i=i, t=total:
+                    self._progress_lbl.setText(f"Converting {i + 1} / {t}…"))
+                out_path = wav_path.with_suffix(ext_map[fmt])
+                if out_path.exists():
+                    skipped += 1
+                    continue
+                try:
+                    seg = AudioSegment.from_wav(str(wav_path))
+                    if fmt == 'mp3':
+                        seg.export(str(out_path), format='mp3', bitrate='320k')
+                    elif fmt == 'flac':
+                        seg.export(str(out_path), format='flac')
+                    else:
+                        seg.export(str(out_path), format='aiff')
+                    if fmt == 'flac':
+                        _copy_tags_to_flac(wav_path, out_path)
+                    else:
+                        _copy_id3_tags(wav_path, out_path)
+                    converted += 1
+                    if delete:
+                        try:
+                            wav_path.unlink()
+                        except Exception:
+                            pass
+                except Exception:
+                    failed += 1
+                    if out_path.exists():
+                        try:
+                            out_path.unlink()
+                        except Exception:
+                            pass
+            parts = []
+            if converted:
+                parts.append(f"{converted} converted")
+            if skipped:
+                parts.append(f"{skipped} skipped")
+            if failed:
+                parts.append(f"{failed} failed")
+            summary = ", ".join(parts) or "Nothing to convert"
+            QTimer.singleShot(0, lambda: self._on_done(summary))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_done(self, summary: str):
+        self._progress_lbl.setText(f"✓ {summary}")
+        self._convert_btn.setEnabled(True)
+        self._convert_btn.setText("Convert")
+        self.files_changed.emit()
+
+
 # ─── Main Window ─────────────────────────────────────────────────────────────
 
 class App(QMainWindow):
@@ -538,6 +1550,25 @@ class App(QMainWindow):
         """)
         pick.clicked.connect(self._pick_folder)
         sb_lay.addWidget(pick)
+
+        # Tool buttons row
+        tool_row = QHBoxLayout()
+        tool_row.setContentsMargins(4, 4, 4, 4)
+        tool_row.setSpacing(4)
+        for label, slot in [
+            ("📊 Stats",   self._show_stats),
+            ("🏷️ Tags",    self._show_vocab_editor),
+            ("🔄 Convert", self._show_converter),
+        ]:
+            b = QPushButton(label)
+            b.setMinimumHeight(32)
+            b.setFont(QFont("Arial", 9))
+            b.clicked.connect(slot)
+            tool_row.addWidget(b)
+        tool_w = QWidget()
+        tool_w.setStyleSheet(f"background-color: {_C.BG_MEDIUM};")
+        tool_w.setLayout(tool_row)
+        sb_lay.addWidget(tool_w)
 
         self._tracks = TrackListPanel()
         self._tracks.track_selected.connect(self._on_select)
@@ -583,6 +1614,14 @@ class App(QMainWindow):
         a.setShortcut("S")
         a.triggered.connect(self._editor._save)
 
+        tm = mb.addMenu("Tools")
+        a = tm.addAction("📊 Statistics…")
+        a.triggered.connect(self._show_stats)
+        a = tm.addAction("🏷️ Tag Vocabulary…")
+        a.triggered.connect(self._show_vocab_editor)
+        a = tm.addAction("🔄 Convert WAV Files…")
+        a.triggered.connect(self._show_converter)
+
         if HAS_VLC:
             pm = mb.addMenu("Playback")
             a = pm.addAction("Play / Pause")
@@ -595,6 +1634,39 @@ class App(QMainWindow):
         hm = mb.addMenu("Help")
         a = hm.addAction("About")
         a.triggered.connect(self._about)
+
+    def _show_stats(self):
+        files = list(self._tracks._rows.keys())
+        if not files:
+            QMessageBox.information(self, "Stats", "No tracks loaded.")
+            return
+        dlg = StatsDialog(files, self)
+        dlg.exec()
+
+    def _show_vocab_editor(self):
+        dlg = VocabEditorDialog(self)
+        dlg.vocab_saved.connect(self._on_vocab_saved)
+        dlg.exec()
+
+    def _show_converter(self):
+        files = list(self._tracks._rows.keys())
+        wav_files = [f for f in files if f.suffix.lower() == '.wav']
+        if not wav_files:
+            QMessageBox.information(self, "Convert WAVs",
+                                     "No WAV files found in the current folder.")
+            return
+        if not _has_ffmpeg():
+            QMessageBox.warning(self, "Convert WAVs",
+                                 "ffmpeg not found — it is required for conversion.\n"
+                                 "Install ffmpeg and ensure it is on your PATH.")
+            return
+        dlg = WavConverterDialog(files, self)
+        dlg.files_changed.connect(lambda: self._load_dir(self._dir))
+        dlg.exec()
+
+    def _on_vocab_saved(self):
+        self._editor.rebuild_vocab()
+        self._load_dir(self._dir)
 
     def _load_dir(self, directory: Path):
         self._dir = directory
