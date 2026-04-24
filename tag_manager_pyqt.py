@@ -524,6 +524,9 @@ class TagEditorPanel(QWidget):
 class StatsDialog(QDialog):
     """Read-only statistics about all tracks in the current folder."""
 
+    _progress = pyqtSignal(str)   # emitted from worker thread
+    _results  = pyqtSignal(int, int, int, int, dict, dict, dict)
+
     def __init__(self, files: list, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Statistics")
@@ -531,7 +534,10 @@ class StatsDialog(QDialog):
         self.setStyleSheet(_stylesheet())
         self._files = files
         self._init_ui()
-        QTimer.singleShot(60, self._scan)
+        # Connect before starting the thread
+        self._progress.connect(self._status_lbl.setText)
+        self._results.connect(self._show_results)
+        threading.Thread(target=self._scan, daemon=True).start()
 
     def _init_ui(self):
         lay = QVBoxLayout(self)
@@ -563,8 +569,10 @@ class StatsDialog(QDialog):
         energy_counts: dict = {}
         rating_counts: dict = {}
         tag_counts: dict = {}
+        total = len(self._files)
 
-        for path in self._files:
+        for i, path in enumerate(self._files):
+            self._progress.emit(f"Scanning {i + 1} / {total}…")
             try:
                 t = read_tags(path)
                 energy   = t.get('energy')
@@ -583,13 +591,12 @@ class StatsDialog(QDialog):
             except Exception:
                 errors += 1
 
-        total = len(self._files)
-        self._status_lbl.setText(f"Scanned {total} tracks")
-        self._show_results(total, tagged, untagged, errors,
+        self._results.emit(total, tagged, untagged, errors,
                            energy_counts, rating_counts, tag_counts)
 
-    def _show_results(self, total, tagged, untagged, errors,
-                      energy_counts, rating_counts, tag_counts):
+    def _show_results(self, total: int, tagged: int, untagged: int, errors: int,
+                      energy_counts: dict, rating_counts: dict, tag_counts: dict):
+        self._status_lbl.setText(f"Scanned {total} tracks")
         lay = self._body_lay
 
         # Summary cards
@@ -1185,8 +1192,8 @@ class VocabEditorDialog(QDialog):
                 for mode_text, mode in [("Replace…", "replace"), ("Merge", "merge")]:
                     b = QPushButton(mode_text)
                     b.clicked.connect(
-                        lambda _, p=path, m=mode, d=dlg:
-                        self._load_pack_from_file(p, m, d))
+                        lambda _, p=path, m=mode, picker=dlg:
+                        self._load_pack_from_file(p, m, picker))
                     btns.addWidget(b)
                 btns.addStretch()
                 cl.addLayout(btns)
@@ -1358,6 +1365,8 @@ class WavConverterDialog(QDialog):
     """Convert WAV files in the current folder to FLAC, AIFF, or MP3."""
 
     files_changed = pyqtSignal()
+    _progress_sig = pyqtSignal(str)   # thread-safe progress update
+    _done_sig     = pyqtSignal(str)   # thread-safe completion
 
     def __init__(self, files: list, parent=None):
         super().__init__(parent)
@@ -1405,6 +1414,10 @@ class WavConverterDialog(QDialog):
         self._progress_lbl = QLabel("")
         self._progress_lbl.setStyleSheet(f"color: {_C.FG2};")
         lay.addWidget(self._progress_lbl)
+
+        # Connect thread-safe signals to UI slots
+        self._progress_sig.connect(self._progress_lbl.setText)
+        self._done_sig.connect(self._on_done)
 
         lay.addStretch()
 
@@ -1459,9 +1472,7 @@ class WavConverterDialog(QDialog):
             converted = skipped = failed = 0
             total = len(wav_files)
             for i, wav_path in enumerate(wav_files):
-                QTimer.singleShot(
-                    0, lambda i=i, t=total:
-                    self._progress_lbl.setText(f"Converting {i + 1} / {t}…"))
+                self._progress_sig.emit(f"Converting {i + 1} / {total}…")
                 out_path = wav_path.with_suffix(ext_map[fmt])
                 if out_path.exists():
                     skipped += 1
@@ -1498,8 +1509,7 @@ class WavConverterDialog(QDialog):
                 parts.append(f"{skipped} skipped")
             if failed:
                 parts.append(f"{failed} failed")
-            summary = ", ".join(parts) or "Nothing to convert"
-            QTimer.singleShot(0, lambda: self._on_done(summary))
+            self._done_sig.emit(", ".join(parts) or "Nothing to convert")
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -1611,7 +1621,7 @@ class App(QMainWindow):
 
         em = mb.addMenu("Edit")
         a = em.addAction("Save")
-        a.setShortcut("S")
+        a.setShortcut("Ctrl+S")
         a.triggered.connect(self._editor._save)
 
         tm = mb.addMenu("Tools")
