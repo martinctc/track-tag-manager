@@ -19,10 +19,10 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QLabel, QPushButton, QScrollArea,
     QFrame, QFileDialog, QMessageBox, QSlider, QDialog, QDialogButtonBox,
     QLineEdit, QTextEdit, QColorDialog, QButtonGroup, QRadioButton,
-    QCheckBox, QProgressBar, QSizePolicy, QSplitter, QInputDialog,
+    QCheckBox, QProgressBar, QSizePolicy, QSplitter, QInputDialog, QMenu,
 )
 from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, QThread, pyqtSlot
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QFont, QColor, QCursor
 
 # Re-use all tag I/O from the original app — no changes needed there.
 sys.path.insert(0, str(Path(__file__).parent))
@@ -325,7 +325,8 @@ def _fmt(ms: int) -> str:
 class TagEditorPanel(QWidget):
     """Full tag editor: energy, rating, and all comment categories."""
 
-    saved = pyqtSignal(Path)
+    saved         = pyqtSignal(Path)
+    vocab_changed = pyqtSignal()   # emitted after a quick vocabulary addition
 
     def __init__(self):
         super().__init__()
@@ -344,6 +345,16 @@ class TagEditorPanel(QWidget):
         self._track_lbl = QLabel("No track selected")
         self._track_lbl.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         outer.addWidget(self._track_lbl)
+
+        # Legacy-tags warning bar — hidden until unknown tags are detected
+        self._legacy_bar = QFrame()
+        self._legacy_bar.setStyleSheet(
+            "background-color: #3a2400; border-radius: 4px;")
+        self._legacy_lay = QVBoxLayout(self._legacy_bar)
+        self._legacy_lay.setContentsMargins(10, 8, 10, 8)
+        self._legacy_lay.setSpacing(4)
+        self._legacy_bar.hide()
+        outer.addWidget(self._legacy_bar)
 
         # Scrollable section — stored so it can be rebuilt when vocab changes
         self._scroll = QScrollArea()
@@ -438,6 +449,7 @@ class TagEditorPanel(QWidget):
         self._build_scroll_content()
         if self._path:
             self._refresh_buttons()
+        self._refresh_legacy()
 
     @staticmethod
     def _section_label(text: str) -> QLabel:
@@ -451,6 +463,139 @@ class TagEditorPanel(QWidget):
         self._tags = read_tags(path)
         self._track_lbl.setText(path.name)
         self._refresh_buttons()
+        self._refresh_legacy()
+
+    # ── Legacy tag detection ──────────────────────────────────────────────────
+
+    def _refresh_legacy(self):
+        """Rebuild the legacy-tag warning bar from scratch."""
+        while self._legacy_lay.count():
+            item = self._legacy_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not self._path:
+            self._legacy_bar.hide()
+            return
+
+        comments = self._tags.get('comments', set())
+        energy   = self._tags.get('energy')
+
+        all_known = {t for tags in COMMENT_TAGS.values() for t in tags}
+        unknown_tags   = sorted(c for c in comments if c not in all_known)
+        unknown_energy = energy if (energy and energy not in ENERGY_LEVELS) else None
+
+        if not unknown_tags and not unknown_energy:
+            self._legacy_bar.hide()
+            return
+
+        hdr = QLabel("⚠  Tags not in current vocabulary — add to your system or remove:")
+        hdr.setFont(QFont("Arial", 8, QFont.Weight.Bold))
+        hdr.setStyleSheet("color: #f0a030; background: transparent;")
+        self._legacy_lay.addWidget(hdr)
+
+        chips_w = QWidget()
+        chips_w.setStyleSheet("background: transparent;")
+        chips_lay = QHBoxLayout(chips_w)
+        chips_lay.setContentsMargins(0, 0, 0, 0)
+        chips_lay.setSpacing(6)
+
+        if unknown_energy:
+            self._add_legacy_chip(chips_lay,
+                                   f"Energy: {unknown_energy}",
+                                   is_energy=True, value=unknown_energy)
+        for tag in unknown_tags:
+            self._add_legacy_chip(chips_lay, tag, is_energy=False, value=tag)
+
+        chips_lay.addStretch()
+        self._legacy_lay.addWidget(chips_w)
+        self._legacy_bar.show()
+
+    def _add_legacy_chip(self, lay: QHBoxLayout, label: str,
+                          is_energy: bool, value: str):
+        chip = QFrame()
+        chip.setStyleSheet("background-color: #4a2800; border-radius: 3px;")
+        ch = QHBoxLayout(chip)
+        ch.setContentsMargins(8, 3, 3, 3)
+        ch.setSpacing(2)
+
+        lbl = QLabel(label)
+        lbl.setFont(QFont("Arial", 9))
+        lbl.setStyleSheet("color: #f0c060; background: transparent;")
+        ch.addWidget(lbl)
+
+        if not is_energy:
+            add_b = QPushButton("＋")
+            add_b.setFixedSize(22, 22)
+            add_b.setToolTip(f"Add '{value}' to vocabulary")
+            add_b.setStyleSheet(
+                "QPushButton { color: #2ecc71; font-weight: bold; "
+                "background: transparent; padding: 0; border: none; }")
+            add_b.clicked.connect(lambda _, t=value: self._add_legacy_to_vocab(t))
+            ch.addWidget(add_b)
+
+        clr_b = QPushButton("✕")
+        clr_b.setFixedSize(22, 22)
+        clr_b.setToolTip("Remove from this track (does not save automatically)")
+        clr_b.setStyleSheet(
+            "QPushButton { color: #e74c3c; background: transparent; "
+            "padding: 0; border: none; }")
+        if is_energy:
+            clr_b.clicked.connect(self._clear_legacy_energy)
+        else:
+            clr_b.clicked.connect(lambda _, t=value: self._clear_legacy_tag(t))
+        ch.addWidget(clr_b)
+
+        lay.addWidget(chip)
+
+    def _add_legacy_to_vocab(self, tag: str):
+        """Add the given legacy tag to an existing or new category."""
+        menu = QMenu(self)
+        for cat in COMMENT_TAGS:
+            a = menu.addAction(cat)
+            a.setData(cat)
+        menu.addSeparator()
+        new_a = menu.addAction("＋ New category…")
+        new_a.setData("__new__")
+
+        chosen = menu.exec(QCursor.pos())
+        if not chosen:
+            return
+
+        cat = chosen.data()
+        if cat == "__new__":
+            cat, ok = QInputDialog.getText(self, "New category", "Category name:")
+            if not ok or not cat.strip():
+                return
+            cat = cat.strip()
+            COMMENT_TAGS.setdefault(cat, [])
+
+        # Insert the raw string exactly as found in the file — no normalisation
+        if tag not in COMMENT_TAGS[cat]:
+            COMMENT_TAGS[cat].append(tag)
+        save_tag_config()
+        self.rebuild_vocab()       # rebuilds palette + calls _refresh_legacy
+        self.vocab_changed.emit()  # tell App to refresh all track-row statuses
+
+    def _clear_legacy_tag(self, tag: str):
+        """Remove a legacy tag from the current track (does not save to file)."""
+        self._tags.setdefault('comments', set()).discard(tag)
+        self._refresh_legacy()
+
+    def _clear_legacy_energy(self):
+        """Clear a legacy energy value from the current track (does not save)."""
+        self._tags['energy'] = None
+        self._refresh_legacy()
+        self._refresh_buttons()
+
+    # ── Load track ───────────────────────────────────────────────────────────
+
+    def load(self, path: Path):
+        self._path = path
+        self._tags = read_tags(path)
+        self._track_lbl.setText(path.name)
+        self._refresh_buttons()
+        self._refresh_legacy()
 
     def _refresh_buttons(self):
         energy   = self._tags.get('energy')
@@ -1612,6 +1757,7 @@ class App(QMainWindow):
 
         self._editor = TagEditorPanel()
         self._editor.saved.connect(self._on_saved)
+        self._editor.vocab_changed.connect(self._on_vocab_quick_add)
         r_lay.addWidget(self._editor, 1)
 
         right.setLayout(r_lay)
@@ -1696,6 +1842,15 @@ class App(QMainWindow):
     def _on_vocab_saved(self):
         self._editor.rebuild_vocab()
         self._load_dir(self._dir)
+
+    def _on_vocab_quick_add(self):
+        """Refresh track-row statuses after a single tag is added to vocab.
+
+        Deliberately avoids _load_dir() to preserve selection and scroll
+        position — only the status indicator on each row needs updating.
+        """
+        for row in self._tracks._rows.values():
+            row.refresh()
 
     def _load_dir(self, directory: Path):
         self._dir = directory
