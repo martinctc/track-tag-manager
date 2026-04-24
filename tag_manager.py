@@ -1302,9 +1302,56 @@ class App(tk.Tk):
         t = read_tags(path)
         return bool(t.get('energy') or t.get('rating') or t.get('comments'))
 
+    def _get_tag_status(self, path):
+        """Analyze a track's tagging completeness and return status: 'full', 'partial', or 'empty'.
+        
+        - 'empty': No tags at all
+        - 'partial': Has some tags but missing energy, rating, or comments from some categories
+        - 'full': Has energy + rating + at least one tag from EVERY comment category
+        """
+        t = read_tags(path)
+        energy = t.get('energy')
+        rating = t.get('rating')
+        comments = t.get('comments', set())
+        
+        # Check if completely untagged
+        if not energy and not rating and not comments:
+            return 'empty'
+        
+        # Check if fully tagged: has energy, rating, AND at least one tag from every category
+        has_energy = bool(energy)
+        has_rating = bool(rating)
+        
+        # Check if has at least one comment from each category
+        has_all_categories = True
+        for category in COMMENT_TAGS:
+            # Get all tags in this category
+            category_tags = set(COMMENT_TAGS[category])
+            # Check if track has at least one tag from this category
+            has_category = bool(comments & category_tags)
+            if not has_category:
+                has_all_categories = False
+                break
+        
+        if has_energy and has_rating and has_all_categories:
+            return 'full'
+        else:
+            return 'partial'
+
+    def _get_status_indicator(self, status):
+        """Return the emoji indicator based on tag status."""
+        if status == 'full':
+            return '🟢'
+        elif status == 'partial':
+            return '🟡'
+        else:  # empty
+            return '🔴'
+
     def _list_label(self, path):
-        """Return the listbox display text — prefixed with ● if untagged."""
-        return f"{path.name}" if self._is_tagged(path) else f"●  {path.name}"
+        """Return the listbox display text with colour indicator based on tag status."""
+        status = self._get_tag_status(path)
+        indicator = self._get_status_indicator(status)
+        return f"{indicator}  {path.name}"
 
     def _update_list_label(self, idx):
         """Refresh a single listbox entry after tagging."""
