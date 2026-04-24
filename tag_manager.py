@@ -450,6 +450,19 @@ def _extract_rating_from_comments(comments):
                 return r
     return None
 
+def _extract_energy_from_comments(comments):
+    """Promote the first energy-level word found in a comment set (legacy support).
+
+    Older versions and some DJ tools stored the energy level as the first word
+    of the comment field rather than in the Genre (TCON/GENRE/©gen) field.
+    Checks in ENERGY_LEVELS order for determinism; removes the word in-place.
+    """
+    for level in ENERGY_LEVELS:
+        if level in comments:
+            comments.discard(level)
+            return level
+    return None
+
 def read_tags(path):
     try:
         audio = _open(path)
@@ -481,6 +494,9 @@ def read_tags(path):
             if comment_rating is not None:
                 rating = comment_rating
 
+            if energy is None:
+                energy = _extract_energy_from_comments(comments)
+
             return {'energy': energy, 'rating': rating, 'comments': comments}
 
         t = audio.tags if not is_flac else audio
@@ -511,6 +527,9 @@ def read_tags(path):
             if rating is None:
                 rating = comment_rating
 
+            if energy is None:
+                energy = _extract_energy_from_comments(comments)
+
             return {'energy': energy, 'rating': rating, 'comments': comments}
 
         # ID3-based formats (MP3, WAV, AIFF)
@@ -537,6 +556,9 @@ def read_tags(path):
         comment_rating = _extract_rating_from_comments(comments)
         if rating is None:
             rating = comment_rating
+
+        if energy is None:
+            energy = _extract_energy_from_comments(comments)
 
         return {'energy': energy, 'rating': rating, 'comments': comments}
     except Exception as e:
