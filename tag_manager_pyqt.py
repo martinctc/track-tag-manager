@@ -34,13 +34,25 @@ from tag_manager import (
     normalize_tag_name, _has_ffmpeg, _copy_id3_tags, _copy_tags_to_flac,
 )
 
-# Optional audio: uses python-vlc when present, silent fallback otherwise.
+# Optional audio: VLC preferred, pygame as fallback, silent if neither.
 try:
     import vlc as _vlc
     _vlc.Instance()          # raises if libvlc.dll / libvlc.so is missing
     HAS_VLC = True
 except Exception:
     HAS_VLC = False
+
+HAS_PYGAME = False
+if not HAS_VLC:
+    try:
+        import pygame as _pg
+        _pg.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=2048)
+        _pg.mixer.init()
+        HAS_PYGAME = True
+    except Exception:
+        pass
+
+HAS_AUDIO = HAS_VLC or HAS_PYGAME
 
 
 # ─── Colour palette ─────────────────────────────────────────────────────────
@@ -209,19 +221,21 @@ class TrackListPanel(QWidget):
 
 
 class AudioBar(QWidget):
-    """Compact playback controls (shown only when VLC is available)."""
+    """Compact playback controls. Uses VLC when available, falls back to pygame."""
 
     def __init__(self):
         super().__init__()
-        self._player = None
-        self._media_player = None
+        self._path: Path | None = None
         self._playing = False
+        self._duration_ms = 0
+        self._seek_offset_ms = 0  # pygame: position at which play() was last called
         self._timer = QTimer()
         self._timer.timeout.connect(self._tick)
 
         if HAS_VLC:
-            self._instance = _vlc.Instance('--quiet')
-            self._player = self._instance.media_list_player_new()
+            self._instance    = _vlc.Instance('--quiet')
+            self._player      = self._instance.media_list_player_new()
+            self._media_player = None
 
         lay = QHBoxLayout()
         lay.setContentsMargins(10, 6, 10, 6)
@@ -262,59 +276,110 @@ class AudioBar(QWidget):
         self.setStyleSheet(f"background-color: {_C.BG_MEDIUM};")
 
     def load(self, path: Path):
-        if not HAS_VLC:
-            return
-        ml = self._instance.media_list_new([str(path)])
-        self._player.set_media_list(ml)
-        self._media_player = self._player.get_media_player()
-        self._play_btn.setEnabled(True)
-        # Auto-play on track selection
-        self._player.play()
+        self._path = path
+        self._seek_offset_ms = 0
+
+        if HAS_VLC:
+            ml = self._instance.media_list_new([str(path)])
+            self._player.set_media_list(ml)
+            self._media_player = self._player.get_media_player()
+            self._player.play()
+
+        elif HAS_PYGAME:
+            # Get duration via mutagen before loading into mixer
+            try:
+                from mutagen import File as _mf
+                mf = _mf(str(path))
+                self._duration_ms = int(mf.info.length * 1000) if (mf and mf.info) else 0
+            except Exception:
+                self._duration_ms = 0
+            _pg.mixer.music.stop()
+            _pg.mixer.music.load(str(path))
+            _pg.mixer.music.set_volume(self._vol.value() / 100)
+            _pg.mixer.music.play()
+
         self._playing = True
         self._play_btn.setText("⏸")
+        self._play_btn.setEnabled(True)
         self._timer.start(150)
 
     def toggle_play(self):
-        if not HAS_VLC or not self._player:
+        if not HAS_AUDIO or not self._path:
             return
         if self._playing:
-            self._player.pause()
+            if HAS_VLC:
+                self._player.pause()
+            else:
+                _pg.mixer.music.pause()
             self._play_btn.setText("▶")
             self._timer.stop()
         else:
-            self._player.play()
+            if HAS_VLC:
+                self._player.play()
+            else:
+                _pg.mixer.music.unpause()
             self._play_btn.setText("⏸")
             self._timer.start(150)
         self._playing = not self._playing
 
     def stop(self):
-        if not HAS_VLC or not self._player:
-            return
-        self._player.stop()
+        if HAS_VLC:
+            self._player.stop()
+        elif HAS_PYGAME:
+            _pg.mixer.music.stop()
         self._playing = False
+        self._seek_offset_ms = 0
         self._play_btn.setText("▶")
         self._timer.stop()
         self._scrub.setValue(0)
         self._time.setText("0:00 / 0:00")
 
     def _seek(self, val: int):
-        if self._media_player:
+        if HAS_VLC and self._media_player:
             self._media_player.set_position(val / 1000)
+        elif HAS_PYGAME and self._path:
+            target_ms = int((val / 1000) * self._duration_ms)
+            self._seek_offset_ms = target_ms
+            _pg.mixer.music.play(start=target_ms / 1000)
 
     def _set_vol(self, val: int):
-        if self._media_player:
+        if HAS_VLC and self._media_player:
             self._media_player.audio_set_volume(val)
+        elif HAS_PYGAME:
+            _pg.mixer.music.set_volume(val / 100)
 
     def _tick(self):
-        if not self._media_player:
-            return
-        pos = self._media_player.get_position()
-        dur = self._media_player.get_length()
-        cur = int(pos * dur)
-        self._scrub.blockSignals(True)
-        self._scrub.setValue(int(pos * 1000))
-        self._scrub.blockSignals(False)
-        self._time.setText(f"{_fmt(cur)} / {_fmt(dur)}")
+        if HAS_VLC:
+            if not self._media_player:
+                return
+            pos = self._media_player.get_position()
+            dur = self._media_player.get_length()
+            cur = int(pos * dur)
+            self._scrub.blockSignals(True)
+            self._scrub.setValue(int(pos * 1000))
+            self._scrub.blockSignals(False)
+            self._time.setText(f"{_fmt(cur)} / {_fmt(dur)}")
+
+        elif HAS_PYGAME:
+            if not _pg.mixer.music.get_busy():
+                if self._playing:
+                    # Track ended naturally
+                    self._playing = False
+                    self._play_btn.setText("▶")
+                    self._timer.stop()
+                    self._scrub.setValue(0)
+                    self._time.setText(f"0:00 / {_fmt(self._duration_ms)}")
+                return
+            raw_pos = _pg.mixer.music.get_pos()   # ms since last play() call
+            if raw_pos < 0:
+                return
+            cur = self._seek_offset_ms + raw_pos
+            dur = self._duration_ms
+            pos_frac = (cur / dur) if dur else 0
+            self._scrub.blockSignals(True)
+            self._scrub.setValue(min(1000, int(pos_frac * 1000)))
+            self._scrub.blockSignals(False)
+            self._time.setText(f"{_fmt(cur)} / {_fmt(dur)}")
 
 
 def _fmt(ms: int) -> str:
@@ -1752,7 +1817,7 @@ class App(QMainWindow):
         r_lay.setSpacing(0)
 
         self._audio = AudioBar()
-        if HAS_VLC:
+        if HAS_AUDIO:
             r_lay.addWidget(self._audio)
 
         self._editor = TagEditorPanel()
@@ -1797,7 +1862,7 @@ class App(QMainWindow):
         a = tm.addAction("🔄 Convert WAV Files…")
         a.triggered.connect(self._show_converter)
 
-        if HAS_VLC:
+        if HAS_AUDIO:
             pm = mb.addMenu("Playback")
             a = pm.addAction("Play / Pause")
             a.setShortcut("Space")
@@ -1863,7 +1928,7 @@ class App(QMainWindow):
 
     def _on_select(self, path: Path):
         self._editor.load(path)
-        if HAS_VLC:
+        if HAS_AUDIO:
             self._audio.load(path)
 
     def _on_saved(self, path: Path):
