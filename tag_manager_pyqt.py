@@ -334,6 +334,15 @@ class AudioBar(QWidget):
         self._scrub.setValue(0)
         self._time.setText("0:00 / 0:00")
 
+    def release_file(self):
+        """Stop playback and release any file lock (needed before writing on Windows)."""
+        self.stop()
+        if HAS_PYGAME:
+            try:
+                _pg.mixer.music.unload()  # pygame 2.0+ — releases the OS file handle
+            except AttributeError:
+                pass  # older pygame without unload()
+
     def _seek(self, val: int):
         if HAS_VLC and self._media_player:
             self._media_player.set_position(val / 1000)
@@ -390,6 +399,7 @@ def _fmt(ms: int) -> str:
 class TagEditorPanel(QWidget):
     """Full tag editor: energy, rating, and all comment categories."""
 
+    pre_save      = pyqtSignal(Path)  # emitted before write so audio can release lock
     saved         = pyqtSignal(Path)
     vocab_changed = pyqtSignal()   # emitted after a quick vocabulary addition
 
@@ -717,6 +727,7 @@ class TagEditorPanel(QWidget):
     def _save(self):
         if not self._path:
             return
+        self.pre_save.emit(self._path)   # let App release audio file lock first
         err = write_tags(
             self._path,
             self._tags.get('energy'),
@@ -1821,6 +1832,7 @@ class App(QMainWindow):
             r_lay.addWidget(self._audio)
 
         self._editor = TagEditorPanel()
+        self._editor.pre_save.connect(self._on_pre_save)
         self._editor.saved.connect(self._on_saved)
         self._editor.vocab_changed.connect(self._on_vocab_quick_add)
         r_lay.addWidget(self._editor, 1)
@@ -1931,8 +1943,16 @@ class App(QMainWindow):
         if HAS_AUDIO:
             self._audio.load(path)
 
+    def _on_pre_save(self, path: Path):
+        """Release the audio file lock before write_tags() runs (Windows)."""
+        if HAS_AUDIO:
+            self._audio.release_file()
+
     def _on_saved(self, path: Path):
         self._tracks.refresh_track(path)
+        # Reload audio so playback resumes from the updated file
+        if HAS_AUDIO:
+            self._audio.load(path)
 
     def _about(self):
         QMessageBox.about(
