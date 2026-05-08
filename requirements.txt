@@ -3,3 +3,7 @@
 mutagen>=1.47,<2.0
 pygame>=2.6,<3.0
 pydub>=0.25,<0.26
+
+# Optional — enables M4A/FLAC/AIFF audio preview in tag_manager.py.
+# Requires VLC media player to be installed on the system separately.
+# python-vlc>=3.0,<4.0

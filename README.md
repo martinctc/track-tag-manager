@@ -19,7 +19,7 @@ There are two versions of this app:
 | **File** | `tag_manager.py` | `tag_manager_pyqt.py` |
 | **Branch** | `main` | `feat/pyqt6-migration` |
 | **UI toolkit** | Tkinter (built-in) | PyQt6 |
-| **Dependencies** | Minimal (`mutagen`, `pygame`) | Requires `PyQt6` (+ optional `python-vlc`) |
+| **Dependencies** | `mutagen`, `pygame` (+ optional `python-vlc`) | Requires `PyQt6` (+ optional `python-vlc`) |
 | **Status** | Battle-tested, production use | Feature-complete preview, actively developed |
 
 **Use the stable version** if you just want to tag tracks without friction — it requires fewer dependencies and has been in daily use.
@@ -139,10 +139,12 @@ See [`presets/README.md`](presets/README.md) for the file format, conventions, a
 | Format | Playback | Tagging | Rekordbox Comment tags |
 |---|---|---|---|
 | MP3 | ✅ | ✅ | ✅ |
-| FLAC | ❌ (pygame limitation) | ✅ | ✅ |
-| AIFF | ❌ (pygame limitation) | ✅ | ✅ |
-| M4A | ❌ (pygame limitation) | ✅ | ✅ |
+| FLAC | ✅ with VLC / ❌ pygame only | ✅ | ✅ |
+| AIFF | ✅ with VLC / ❌ pygame only | ✅ | ✅ |
+| M4A | ✅ with VLC / ❌ pygame only | ✅ | ✅ |
 | WAV | ✅ | ✅ | ❌ (Genre & Rating only) |
+
+> 💡 **M4A/FLAC/AIFF preview:** Install [VLC media player](https://www.videolan.org/vlc/) and `pip install python-vlc` to enable audio preview for these formats. The app detects VLC automatically at startup — no config needed.
 
 For best Rekordbox compatibility, **FLAC is the recommended lossless format** — it supports full metadata including comments, and produces smaller files than both WAV and AIFF.
 

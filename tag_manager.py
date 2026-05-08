@@ -17,7 +17,21 @@ import time
 import audioop
 import shutil
 import threading
-import pygame
+# Optional audio: VLC preferred (handles M4A/FLAC/AIFF), pygame as fallback.
+try:
+    import vlc as _vlc
+    _vlc.Instance()  # raises if libvlc shared library is missing
+    HAS_VLC = True
+except Exception:
+    HAS_VLC = False
+
+HAS_PYGAME = False
+if not HAS_VLC:
+    try:
+        import pygame
+        HAS_PYGAME = True
+    except Exception:
+        pass
 from mutagen.mp3 import MP3
 from mutagen.wave import WAVE
 from mutagen.aiff import AIFF
@@ -779,7 +793,19 @@ class App(tk.Tk):
         self._canvas_h  = 0
         self._resize_job = None       # debounce handle for canvas resize
 
-        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
+        # Audio backend — VLC preferred, pygame fallback
+        self._vlc_inst        = None
+        self._vlc_player      = None
+        self._vlc_seek_token  = None  # invalidates stale deferred-seek callbacks
+        if HAS_VLC:
+            try:
+                self._vlc_inst   = _vlc.Instance('--quiet')
+                self._vlc_player = self._vlc_inst.media_player_new()
+            except Exception:
+                self._vlc_inst   = None
+                self._vlc_player = None
+        if self._vlc_player is None and HAS_PYGAME:
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
 
         self._build()
         self._pick_folder(startup=True)
@@ -989,7 +1015,8 @@ class App(tk.Tk):
         )
         vol_slider.set(80)
         vol_slider.pack(side='right')
-        pygame.mixer.music.set_volume(0.8)
+        if HAS_PYGAME and self._vlc_player is None:
+            pygame.mixer.music.set_volume(0.8)
 
         # Waveform / Scrubber
         self.prog_canvas = tk.Canvas(bar, bg=BG2, height=60,
@@ -1100,9 +1127,28 @@ class App(tk.Tk):
         return max(0.0, min(1.0, pos / self.p_duration))
 
     def _current_pos(self):
+        if self._vlc_player is not None:
+            t = self._vlc_player.get_time()
+            return t / 1000.0 if t >= 0 else self.p_seek_off
         if self.p_state == 'playing':
             return self.p_seek_off + (time.time() - self.p_t0)
         return self.p_seek_off
+
+    def _vlc_seek_when_ready(self, secs, paused, token):
+        """Poll until VLC is playing, then seek (and optionally pause).
+        Token prevents stale callbacks from affecting a subsequently loaded track."""
+        if token is not self._vlc_seek_token:
+            return
+        state = self._vlc_player.get_state()
+        if state == _vlc.State.Playing and self._vlc_player.get_length() > 0:
+            if secs > 0:
+                self._vlc_player.set_time(int(secs * 1000))
+            if paused:
+                self._vlc_player.pause()
+        elif state in (_vlc.State.Error, _vlc.State.Stopped):
+            return  # failed to open — _update_progress will clean up
+        else:
+            self.after(50, lambda: self._vlc_seek_when_ready(secs, paused, token))
 
     def _build_waveform(self):
         """Create canvas items for waveform bars and playhead (called once per track)."""
@@ -1184,31 +1230,52 @@ class App(tk.Tk):
     def _play_track(self, path):
         """Load and start playing a track from the beginning."""
         self._cancel_progress()
-        pygame.mixer.music.stop()
+        self._vlc_seek_token = object()  # invalidate any pending seeks
         self.waveform = []
         self._build_waveform()
         self._load_waveform_async(path)
-        try:
-            pygame.mixer.music.load(str(path))
-            pygame.mixer.music.play()
-            self.p_state    = 'playing'
-            self.p_seek_off = 0.0
-            self.p_t0       = time.time()
-            self.p_duration = self._get_duration(path)
-            self.play_btn.config(text="⏸")
-            self.dur_lbl.config(text=self._fmt(self.p_duration))
-            self.time_lbl.config(text="0:00")
-            self._draw_progress(0)
-            self._schedule_progress()
-        except Exception as e:
-            self.p_state = 'stopped'
-            self.play_btn.config(text="▶")
-            if path.suffix.lower() in ('.aif', '.aiff', '.flac'):
-                self._msg("AIFF/FLAC playback not supported — tags still work fine", FG2)
-            elif path.suffix.lower() == '.m4a':
-                self._msg("M4A playback not supported — tags still work fine", FG2)
-            else:
+        if self._vlc_player is not None:
+            try:
+                self._vlc_player.stop()
+                media = self._vlc_inst.media_new(str(path))
+                self._vlc_player.set_media(media)
+                self._vlc_player.play()
+                self._vlc_player.audio_set_volume(int(self.vol_var.get()))
+                self.p_state    = 'playing'
+                self.p_seek_off = 0.0
+                self.p_duration = self._get_duration(path)
+                self.play_btn.config(text="⏸")
+                self.dur_lbl.config(text=self._fmt(self.p_duration))
+                self.time_lbl.config(text="0:00")
+                self._draw_progress(0)
+                self._schedule_progress()
+            except Exception as e:
+                self.p_state = 'stopped'
+                self.play_btn.config(text="▶")
                 self._msg(f"Playback error: {e}", "#e74c3c")
+        elif HAS_PYGAME:
+            pygame.mixer.music.stop()
+            try:
+                pygame.mixer.music.load(str(path))
+                pygame.mixer.music.play()
+                self.p_state    = 'playing'
+                self.p_seek_off = 0.0
+                self.p_t0       = time.time()
+                self.p_duration = self._get_duration(path)
+                self.play_btn.config(text="⏸")
+                self.dur_lbl.config(text=self._fmt(self.p_duration))
+                self.time_lbl.config(text="0:00")
+                self._draw_progress(0)
+                self._schedule_progress()
+            except Exception as e:
+                self.p_state = 'stopped'
+                self.play_btn.config(text="▶")
+                if path.suffix.lower() in ('.aif', '.aiff', '.flac'):
+                    self._msg("AIFF/FLAC playback not supported — tags still work fine", FG2)
+                elif path.suffix.lower() == '.m4a':
+                    self._msg("M4A playback not supported — tags still work fine", FG2)
+                else:
+                    self._msg(f"Playback error: {e}", "#e74c3c")
 
     def _play_from(self, secs):
         """Seek to a position and play."""
@@ -1216,13 +1283,30 @@ class App(tk.Tk):
             return
         path = self.files[self.idx]
         self._cancel_progress()
-        try:
-            pygame.mixer.music.load(str(path))
-            pygame.mixer.music.play(start=float(secs))
-        except Exception:
-            pygame.mixer.music.load(str(path))
-            pygame.mixer.music.play()
-            secs = 0.0
+        if self._vlc_player is not None:
+            self._vlc_seek_token = object()
+            state = self._vlc_player.get_state()
+            needs_reload = (
+                self._vlc_player.get_media() is None
+                or state in (_vlc.State.Stopped, _vlc.State.Ended, _vlc.State.NothingSpecial)
+            )
+            if needs_reload:
+                media = self._vlc_inst.media_new(str(path))
+                self._vlc_player.set_media(media)
+                self._vlc_player.play()
+                token = self._vlc_seek_token
+                self.after(50, lambda: self._vlc_seek_when_ready(float(secs), False, token))
+            else:
+                self._vlc_player.set_time(int(secs * 1000))
+                self._vlc_player.play()
+        elif HAS_PYGAME:
+            try:
+                pygame.mixer.music.load(str(path))
+                pygame.mixer.music.play(start=float(secs))
+            except Exception:
+                pygame.mixer.music.load(str(path))
+                pygame.mixer.music.play()
+                secs = 0.0
         self.p_state    = 'playing'
         self.p_seek_off = float(secs)
         self.p_t0       = time.time()
@@ -1231,13 +1315,19 @@ class App(tk.Tk):
 
     def _toggle_play(self):
         if self.p_state == 'playing':
-            pygame.mixer.music.pause()
+            if self._vlc_player is not None:
+                self._vlc_player.pause()
+            elif HAS_PYGAME:
+                pygame.mixer.music.pause()
             self.p_seek_off = self._current_pos()
             self.p_state = 'paused'
             self.play_btn.config(text="▶")
             self._cancel_progress()
         elif self.p_state == 'paused':
-            pygame.mixer.music.unpause()
+            if self._vlc_player is not None:
+                self._vlc_player.play()
+            elif HAS_PYGAME:
+                pygame.mixer.music.unpause()
             self.p_t0    = time.time()
             self.p_state = 'playing'
             self.play_btn.config(text="⏸")
@@ -1248,11 +1338,17 @@ class App(tk.Tk):
                 self._play_track(self.files[self.idx])
 
     def _set_volume(self, val):
-        pygame.mixer.music.set_volume(float(val) / 100.0)
+        if self._vlc_player is not None:
+            self._vlc_player.audio_set_volume(int(float(val)))
+        elif HAS_PYGAME:
+            pygame.mixer.music.set_volume(float(val) / 100.0)
 
     def _stop_player(self):
         self._cancel_progress()
-        pygame.mixer.music.stop()
+        if self._vlc_player is not None:
+            self._vlc_player.stop()
+        elif HAS_PYGAME:
+            pygame.mixer.music.stop()
         self.p_state    = 'stopped'
         self.p_seek_off = 0.0
         self.play_btn.config(text="▶")
@@ -1280,14 +1376,30 @@ class App(tk.Tk):
     def _update_progress(self):
         if self.p_state != 'playing':
             return
-        if not pygame.mixer.music.get_busy():
-            # Track finished
-            self.p_state    = 'stopped'
-            self.p_seek_off = 0.0
-            self.play_btn.config(text="▶")
-            self._draw_progress(1.0)
-            self.time_lbl.config(text=self._fmt(self.p_duration))
-            return
+        if self._vlc_player is not None:
+            state = self._vlc_player.get_state()
+            if state == _vlc.State.Error:
+                self.p_state    = 'stopped'
+                self.p_seek_off = 0.0
+                self.play_btn.config(text="▶")
+                self._msg("Playback error", "#e74c3c")
+                return
+            if state == _vlc.State.Ended:
+                self.p_state    = 'stopped'
+                self.p_seek_off = 0.0
+                self.play_btn.config(text="▶")
+                self._draw_progress(1.0)
+                self.time_lbl.config(text=self._fmt(self.p_duration))
+                return
+        elif HAS_PYGAME:
+            if not pygame.mixer.music.get_busy():
+                # Track finished
+                self.p_state    = 'stopped'
+                self.p_seek_off = 0.0
+                self.play_btn.config(text="▶")
+                self._draw_progress(1.0)
+                self.time_lbl.config(text=self._fmt(self.p_duration))
+                return
         pos = self._current_pos()
         if self.p_duration > 0:
             pos = min(pos, self.p_duration)
@@ -1554,10 +1666,13 @@ class App(tk.Tk):
         was_playing = self.p_state == 'playing'
         was_paused  = self.p_state == 'paused'
         resume_pos  = self._current_pos() if was_playing else self.p_seek_off
-        # Unload the file so pygame releases the file handle
+        # Stop playback and release the file handle before writing
         self._cancel_progress()
-        pygame.mixer.music.stop()
-        pygame.mixer.music.unload()
+        if self._vlc_player is not None:
+            self._vlc_player.stop()
+        elif HAS_PYGAME:
+            pygame.mixer.music.stop()
+            pygame.mixer.music.unload()
         err = write_tags(
             path,
             self.tags.get('energy'),
@@ -1566,12 +1681,16 @@ class App(tk.Tk):
         )
         if err:
             self._msg(f"Error: {err}", "#e74c3c")
-            # Reload so user can retry; don't proceed with navigation
+            # Re-arm the media so playback can resume if user clicks play again
             if was_playing or was_paused:
-                try:
-                    pygame.mixer.music.load(str(path))
-                except Exception:
-                    pass
+                if self._vlc_player is not None:
+                    media = self._vlc_inst.media_new(str(path))
+                    self._vlc_player.set_media(media)
+                elif HAS_PYGAME:
+                    try:
+                        pygame.mixer.music.load(str(path))
+                    except Exception:
+                        pass
             return False
         self.unsaved = False
         self._msg("✓ saved", ACCENT)
@@ -1583,12 +1702,20 @@ class App(tk.Tk):
             if was_playing:
                 self._play_from(resume_pos)
             elif was_paused:
-                try:
-                    pygame.mixer.music.load(str(path))
-                    pygame.mixer.music.play(start=float(resume_pos))
-                    pygame.mixer.music.pause()
-                except Exception:
-                    pygame.mixer.music.load(str(path))
+                if self._vlc_player is not None:
+                    self._vlc_seek_token = object()
+                    media = self._vlc_inst.media_new(str(path))
+                    self._vlc_player.set_media(media)
+                    self._vlc_player.play()
+                    token = self._vlc_seek_token
+                    self.after(50, lambda: self._vlc_seek_when_ready(resume_pos, True, token))
+                elif HAS_PYGAME:
+                    try:
+                        pygame.mixer.music.load(str(path))
+                        pygame.mixer.music.play(start=float(resume_pos))
+                        pygame.mixer.music.pause()
+                    except Exception:
+                        pygame.mixer.music.load(str(path))
                 self.p_state    = 'paused'
                 self.p_seek_off = resume_pos
                 self.play_btn.config(text="▶")
@@ -1608,7 +1735,12 @@ class App(tk.Tk):
 
     def _on_close(self):
         self._cancel_progress()
-        pygame.mixer.quit()
+        if self._vlc_player is not None:
+            self._vlc_player.stop()
+            self._vlc_player.release()
+            self._vlc_inst.release()
+        elif HAS_PYGAME:
+            pygame.mixer.quit()
         self.destroy()
 
     # ── Stats dashboard ────────────────────────────────────────────────────────
@@ -2513,21 +2645,22 @@ class App(tk.Tk):
                        activeforeground=FG, highlightthickness=0,
                        font=('Helvetica', 10)).pack(anchor='w')
 
-        # Playback warning (shown for FLAC and AIFF)
-        warn_lbl = tk.Label(body,
-                            text="⚠ Note: FLAC/AIFF playback is not supported in this app "
-                                 "(pygame limitation).\nYour tags will still be written "
-                                 "and readable in Rekordbox.",
-                            bg=BG, fg="#e67e22", font=('Helvetica', 9),
-                            justify='left', wraplength=430)
-        warn_lbl.pack(anchor='w', pady=(6, 0))
+        # Playback warning — only relevant when VLC is unavailable (pygame can't play FLAC/AIFF)
+        if not HAS_VLC:
+            warn_lbl = tk.Label(body,
+                                text="⚠ Note: FLAC/AIFF playback is not supported in this app "
+                                     "(pygame limitation).\nYour tags will still be written "
+                                     "and readable in Rekordbox.",
+                                bg=BG, fg="#e67e22", font=('Helvetica', 9),
+                                justify='left', wraplength=430)
+            warn_lbl.pack(anchor='w', pady=(6, 0))
 
-        def _update_warning(*_):
-            if fmt_var.get() in ('aiff', 'flac'):
-                warn_lbl.pack(anchor='w', pady=(6, 0))
-            else:
-                warn_lbl.pack_forget()
-        fmt_var.trace_add('write', _update_warning)
+            def _update_warning(*_):
+                if fmt_var.get() in ('aiff', 'flac'):
+                    warn_lbl.pack(anchor='w', pady=(6, 0))
+                else:
+                    warn_lbl.pack_forget()
+            fmt_var.trace_add('write', _update_warning)
 
         # Delete originals option
         del_var = tk.BooleanVar(value=False)
@@ -2563,10 +2696,13 @@ class App(tk.Tk):
             if self.unsaved:
                 self._save()
 
-            # Stop player and unload to release file handles
+            # Stop player and release file handles before converting
             self._cancel_progress()
-            pygame.mixer.music.stop()
-            pygame.mixer.music.unload()
+            if self._vlc_player is not None:
+                self._vlc_player.stop()
+            elif HAS_PYGAME:
+                pygame.mixer.music.stop()
+                pygame.mixer.music.unload()
 
             def _worker():
                 converted = 0
